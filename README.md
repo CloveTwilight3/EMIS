@@ -97,8 +97,8 @@ Example phrases:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/emis-assistant.git
-cd emis-assistant
+git clone https://github.com/CloveTwilight3/EMIS
+cd EMIS
 
 # Install dependencies
 npm install
