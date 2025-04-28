@@ -1,0 +1,55 @@
+{
+  "name": "emis-assistant",
+  "version": "0.1.0",
+  "description": "EMIS - Voice-activated transfeminine AI assistant",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "dev-win": "set NODE_ENV=development && electron .",
+    "build": "electron-builder",
+    "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac",
+    "build-linux": "electron-builder --linux",
+    "test-mic": "node tools/test-microphone.js"
+  },
+  "keywords": [
+    "voice-assistant",
+    "ai",
+    "electron",
+    "speech-recognition"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4"
+  },
+  "dependencies": {
+    "node-record-lpcm16": "^1.0.1",
+    "node-vad": "^1.1.4"
+  },
+  "build": {
+    "appId": "com.yourdomain.emis",
+    "productName": "EMIS",
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    },
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    }
+  }
+}
