@@ -1,14 +1,117 @@
-// main.js - Main Electron process with custom icon support
+// main.js - Main Electron process with custom icon support and Google Cloud TTS integration
 
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { exec } = require('child_process');
 const fs = require('fs');
+const util = require('util');
+
+// Add the TTS Service class
+class TTSService {
+  constructor(credentialsPath) {
+    try {
+      // Check if the required module is installed
+      const textToSpeech = require('@google-cloud/text-to-speech');
+      
+      // Initialize with Google Cloud credentials
+      this.client = new textToSpeech.TextToSpeechClient({
+        keyFilename: credentialsPath
+      });
+      
+      // Create cache directory if it doesn't exist
+      this.cacheDir = path.join(__dirname, 'audio-cache');
+      if (!fs.existsSync(this.cacheDir)) {
+        fs.mkdirSync(this.cacheDir, { recursive: true });
+      }
+      
+      console.log('TTS Service initialized successfully');
+      this.initialized = true;
+    } catch (error) {
+      console.error('Error initializing TTS service:', error);
+      this.initialized = false;
+    }
+  }
+
+  // Get available voices
+  async getVoices() {
+    if (!this.initialized) {
+      return { success: false, error: 'TTS service not initialized' };
+    }
+    
+    try {
+      const [result] = await this.client.listVoices({});
+      return { success: true, voices: result.voices };
+    } catch (error) {
+      console.error('Error getting voices:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Generate speech and save to file
+  async synthesizeSpeech(text, voiceName = 'en-US-Neural2-F') {
+    if (!this.initialized) {
+      return { success: false, error: 'TTS service not initialized' };
+    }
+    
+    // Create a hash of the text + voice to use as cache key
+    const crypto = require('crypto');
+    const hash = crypto
+      .createHash('md5')
+      .update(`${text}_${voiceName}`)
+      .digest('hex');
+    
+    const outputFile = path.join(this.cacheDir, `${hash}.mp3`);
+    
+    // Check if we have a cached version
+    if (fs.existsSync(outputFile)) {
+      console.log('Using cached audio file');
+      return { success: true, audioFile: outputFile };
+    }
+    
+    // Set up the request
+    const request = {
+      input: { text },
+      voice: {
+        languageCode: voiceName.split('-')[0] + '-' + voiceName.split('-')[1],
+        name: voiceName,
+      },
+      audioConfig: { audioEncoding: 'MP3' },
+    };
+    
+    try {
+      // Perform the text-to-speech request
+      const [response] = await this.client.synthesizeSpeech(request);
+      
+      // Write the audio content to file
+      await fs.promises.writeFile(outputFile, response.audioContent, 'binary');
+      
+      console.log(`Audio content written to: ${outputFile}`);
+      return { success: true, audioFile: outputFile };
+    } catch (error) {
+      console.error('Error synthesizing speech:', error);
+      return { success: false, error: error.message };
+    }
+  }
+}
+
+// Initialize TTS service
+let ttsService = null;
+try {
+  const credentialsPath = path.join(__dirname, 'google-credentials.json');
+  if (fs.existsSync(credentialsPath)) {
+    ttsService = new TTSService(credentialsPath);
+    console.log('TTS service initialized with credentials');
+  } else {
+    console.log('Google credentials file not found, TTS service not initialized');
+  }
+} catch (error) {
+  console.error('Error initializing TTS service:', error);
+}
 
 // Store for EMIS configuration
 let emisConfig = {
   name: 'EMIS',
-  voice: 'female', // Default voice type
+  voice: 'en-US-Neural2-F', // Default to Google's female neural voice
   wakeWord: 'emis',
   volume: 0.8,
   personality: {
@@ -117,6 +220,65 @@ ipcMain.handle('update-config', (event, newConfig) => {
   emisConfig = { ...emisConfig, ...newConfig };
   saveConfig();
   return emisConfig;
+});
+
+// TTS IPC handlers
+ipcMain.handle('get-tts-voices', async () => {
+  if (!ttsService || !ttsService.initialized) {
+    return { 
+      success: false, 
+      error: 'TTS service not available', 
+      message: 'Google Cloud TTS service is not initialized. Please check your credentials and dependencies.'
+    };
+  }
+  
+  try {
+    const result = await ttsService.getVoices();
+    if (result.success) {
+      // Filter to just get female English voices
+      const femaleVoices = result.voices.filter(voice => 
+        voice.name.includes('female') || 
+        voice.name.includes('-F') ||
+        voice.ssmlGender === 'FEMALE'
+      ).filter(voice => 
+        voice.languageCodes.some(code => code.startsWith('en'))
+      );
+      
+      return { 
+        success: true, 
+        voices: femaleVoices.map(v => ({
+          name: v.name,
+          languageCode: v.languageCodes[0],
+          ssmlGender: v.ssmlGender
+        }))
+      };
+    } else {
+      return result;
+    }
+  } catch (error) {
+    console.error('Error getting TTS voices:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('synthesize-speech', async (event, text) => {
+  if (!ttsService || !ttsService.initialized) {
+    return { 
+      success: false, 
+      error: 'TTS service not available',
+      message: 'Google Cloud TTS service is not initialized. Falling back to browser voices.'
+    };
+  }
+  
+  try {
+    // Use current voice or default female voice
+    const voice = emisConfig.voice || 'en-US-Neural2-F';
+    const result = await ttsService.synthesizeSpeech(text, voice);
+    return result;
+  } catch (error) {
+    console.error('Speech synthesis error:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 // Handle command execution

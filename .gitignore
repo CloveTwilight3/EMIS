@@ -1,4 +1,74 @@
+# Dependencies
 node_modules/
+package-lock.json
+yarn.lock
+
+# Build outputs
 dist/
+build/
+out/
+*.exe
+*.dmg
+*.AppImage
+*.snap
+*.deb
+*.rpm
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
 *.log
-node_modules/electron/dist/electron
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Secret files - IMPORTANT!
+google-credentials.json
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Audio cache files
+audio-cache/
+*.mp3
+*.wav
+*.ogg
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Temporary folders
+tmp/
+temp/
+
+# Debug folders
+.nyc_output/
+
+# Electron specific
+.electron/
+
+# TypeScript compiled output
+*.tsbuildinfo

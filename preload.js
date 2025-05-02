@@ -11,5 +11,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateConfig: (config) => ipcRenderer.invoke('update-config', config),
   
   // Execute a command
-  executeCommand: (command) => ipcRenderer.invoke('execute-command', command)
+  executeCommand: (command) => ipcRenderer.invoke('execute-command', command),
+  
+  // TTS functions for Google Cloud integration
+  synthesizeSpeech: (text) => ipcRenderer.invoke('synthesize-speech', text),
+  getTtsVoices: () => ipcRenderer.invoke('get-tts-voices'),
+  
+  // Speech recognition controls
+  startListening: () => ipcRenderer.invoke('start-listening'),
+  stopListening: () => ipcRenderer.invoke('stop-listening'),
+  getMockTranscription: () => ipcRenderer.invoke('get-mock-transcription')
 });
