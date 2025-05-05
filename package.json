@@ -7,23 +7,33 @@
     "start": "electron .",
     "dev": "NODE_ENV=development electron .",
     "dev-win": "set NODE_ENV=development && electron .",
-    "build": "electron-builder",
-    "build-win": "electron-builder --win",
-    "build-mac": "electron-builder --mac",
-    "build-linux": "electron-builder --linux",
-    "test-mic": "node tools/test-microphone.js"
+    "build": "electron-builder build",
+    "build:win": "electron-builder build --win",
+    "build:linux": "electron-builder build --linux",
+    "build:deb": "electron-builder build --linux deb",
+    "build:rpm": "electron-builder build --linux rpm",
+    "build:appimage": "electron-builder build --linux AppImage",
+    "build:all-linux": "electron-builder build --linux AppImage deb rpm",
+    "test-mic": "node tools/test-microphone.js",
+    "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
     "voice-assistant",
     "ai",
     "electron",
-    "speech-recognition"
+    "speech-recognition",
+    "transfeminine",
+    "desktop-assistant"
   ],
-  "author": "CloveTwilight3",
+  "author": {
+    "name": "Clove Twilight",
+    "email": "admin@clovetwilight3.co.uk"
+  },
   "license": "MIT",
   "devDependencies": {
     "electron": "^27.0.0",
-    "electron-builder": "^24.6.4"
+    "electron-builder": "^24.6.4",
+    "electron-notarize": "^1.2.2"
   },
   "dependencies": {
     "@google-cloud/text-to-speech": "^6.0.1",
@@ -31,26 +41,74 @@
     "node-vad": "^1.1.4"
   },
   "build": {
-    "appId": "com.yourdomain.emis",
+    "appId": "com.clovetwilight.emis",
     "productName": "EMIS",
-    "mac": {
-      "category": "public.app-category.productivity"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ]
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Utility"
-    },
+    "copyright": "Copyright © 2025 Clove Twilight",
+    "files": [
+      "**/*",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!**/{.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}"
+    ],
     "directories": {
       "buildResources": "build",
       "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}",
+      "publisherName": "Clove Twilight"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "EMIS Assistant",
+      "license": "./LICENSE"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    },
+    "linux": {
+      "target": ["AppImage", "deb", "rpm"],
+      "category": "Utility",
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
+      "maintainer": "Clove Twilight <admin@clovetwilight3.co.uk>",
+      "desktop": {
+        "Name": "EMIS",
+        "Comment": "Voice-activated transfeminine AI assistant",
+        "Categories": "Utility;Accessibility;"
+      }
+    },
+    "deb": {
+      "depends": [
+        "libnotify4",
+        "libxtst6",
+        "libnss3",
+        "libasound2"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "libnotify",
+        "libXtst",
+        "alsa-lib"
+      ]
+    },
+    "appImage": {
+      "license": "./LICENSE"
     }
   }
 }

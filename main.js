@@ -112,12 +112,29 @@ try {
 let emisConfig = {
   name: 'EMIS',
   voice: 'en-US-Neural2-F', // Default to Google's female neural voice
+  fallbackVoice: {
+    name: 'Google US English Female',
+    lang: 'en-US',
+    localService: false
+  },
   wakeWord: 'emis',
   volume: 0.8,
   personality: {
     greeting: "Hello, I'm EMIS. How can I assist you today?",
     farewell: "Goodbye. I'll be here if you need me.",
-    unknownCommand: "I'm sorry, I didn't understand that command."
+    unknownCommand: "I'm sorry, I didn't understand that command.",
+    taskComplete: "Task completed successfully. What else would you like me to do?",
+    thinking: "Hmm, let me think about that for a moment...",
+    confusion: "I'm not entirely sure what you mean. Could you rephrase that?",
+    affirmation: "Of course, I'd be happy to help with that."
+  },
+  // Default system settings
+  systemSettings: {
+    autoStart: false,
+    startMinimized: false,
+    minimizeToTray: true,
+    alwaysUseGoogleTTS: false,
+    logLevel: 'info'
   }
 };
 
@@ -126,10 +143,31 @@ try {
   const configPath = path.join(app.getPath('userData'), 'emis-config.json');
   if (fs.existsSync(configPath)) {
     const savedConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    emisConfig = { ...emisConfig, ...savedConfig };
+    // Deep merge the configs to ensure new properties are preserved
+    emisConfig = mergeConfigs(emisConfig, savedConfig);
+    console.log('Configuration loaded from:', configPath);
   }
 } catch (error) {
   console.error('Error loading config:', error);
+}
+
+// Merge configs while preserving default properties
+function mergeConfigs(defaultConfig, savedConfig) {
+  const result = { ...defaultConfig };
+  
+  // Merge top-level properties
+  for (const key in savedConfig) {
+    if (typeof savedConfig[key] === 'object' && savedConfig[key] !== null && 
+        typeof defaultConfig[key] === 'object' && defaultConfig[key] !== null) {
+      // Recursively merge objects
+      result[key] = mergeConfigs(defaultConfig[key], savedConfig[key]);
+    } else if (savedConfig[key] !== undefined) {
+      // Use saved value if it exists
+      result[key] = savedConfig[key];
+    }
+  }
+  
+  return result;
 }
 
 // Save config
@@ -137,6 +175,7 @@ function saveConfig() {
   try {
     const configPath = path.join(app.getPath('userData'), 'emis-config.json');
     fs.writeFileSync(configPath, JSON.stringify(emisConfig, null, 2), 'utf8');
+    console.log('Configuration saved to:', configPath);
   } catch (error) {
     console.error('Error saving config:', error);
   }
@@ -147,18 +186,29 @@ let mainWindow;
 
 function createWindow() {
   // Determine icon path based on platform
-  const iconPath = path.join(__dirname, 'assets', 'image.png');
+  let iconPath;
   
-  // Check if the custom icon exists, otherwise use a default
-  const iconExists = fs.existsSync(iconPath);
-  console.log(`Custom icon ${iconExists ? 'found' : 'not found'} at: ${iconPath}`);
-  
-  // Define icon based on platform
-  let icon;
-  if (iconExists) {
-    icon = iconPath;
+  // Platform-specific icons
+  if (process.platform === 'darwin') {
+    iconPath = path.join(__dirname, 'build', 'icon.icns');
+  } else if (process.platform === 'win32') {
+    iconPath = path.join(__dirname, 'build', 'icon.ico');
   } else {
-    // If custom icon doesn't exist, create assets directory
+    iconPath = path.join(__dirname, 'build', 'icon.png');
+  }
+  
+  // Fallback to assets directory if build icons don't exist
+  if (!fs.existsSync(iconPath)) {
+    iconPath = path.join(__dirname, 'assets', 'image.png');
+    console.log('Using fallback icon from assets directory');
+  }
+  
+  // Check if the icon exists, otherwise use a default
+  const iconExists = fs.existsSync(iconPath);
+  console.log(`Icon ${iconExists ? 'found' : 'not found'} at: ${iconPath}`);
+  
+  if (!iconExists) {
+    // If icon doesn't exist, create assets directory
     const assetsDir = path.join(__dirname, 'assets');
     if (!fs.existsSync(assetsDir)) {
       fs.mkdirSync(assetsDir, { recursive: true });
@@ -166,16 +216,22 @@ function createWindow() {
     }
   }
 
+  // Create the browser window with appropriate settings
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
+    minWidth: 600,
+    minHeight: 500,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      spellcheck: true
     },
-    icon: icon,
-    title: 'EMIS Assistant'
+    icon: iconExists ? iconPath : undefined,
+    title: 'EMIS Assistant',
+    backgroundColor: '#f5f5f5',
+    show: !emisConfig.systemSettings.startMinimized
   });
 
   // On macOS, set the dock icon explicitly
@@ -183,18 +239,28 @@ function createWindow() {
     app.dock.setIcon(iconPath);
   }
 
+  // Load the main HTML file
   mainWindow.loadFile('index.html');
   
   // Set taskbar/dock title
   mainWindow.setTitle('EMIS Assistant');
   
-  // Open DevTools in development
+  // Open DevTools in development mode
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
+    console.log('Development mode enabled, opening DevTools');
   }
 
+  // Window event handlers
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+  
+  mainWindow.on('minimize', (event) => {
+    if (emisConfig.systemSettings.minimizeToTray) {
+      // Implement tray minimization here if needed
+      console.log('Window minimized to tray');
+    }
   });
 }
 
@@ -202,12 +268,14 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
   
+  // On macOS, re-create window when dock icon is clicked
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on('window-all-closed', function () {
+  // On macOS, applications stay active until explicitly quit
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -217,7 +285,7 @@ ipcMain.handle('get-config', () => {
 });
 
 ipcMain.handle('update-config', (event, newConfig) => {
-  emisConfig = { ...emisConfig, ...newConfig };
+  emisConfig = mergeConfigs(emisConfig, newConfig);
   saveConfig();
   return emisConfig;
 });
@@ -235,7 +303,7 @@ ipcMain.handle('get-tts-voices', async () => {
   try {
     const result = await ttsService.getVoices();
     if (result.success) {
-      // Filter to just get female English voices
+      // Filter to just get female English voices as preferred
       const femaleVoices = result.voices.filter(voice => 
         voice.name.includes('female') || 
         voice.name.includes('-F') ||
@@ -294,18 +362,25 @@ ipcMain.handle('execute-command', async (event, command) => {
     return openApplication(appName);
   }
   
-  // Other command handlers
-  if (cleanCommand === 'what time is it') {
+  // Time commands
+  if (cleanCommand === 'what time is it' || cleanCommand === 'tell me the time') {
     return { success: true, response: `It's ${new Date().toLocaleTimeString()}` };
   }
   
-  if (cleanCommand === 'hello' || cleanCommand === 'hi') {
+  // Date commands
+  if (cleanCommand === 'what date is it' || cleanCommand === 'what day is it' || cleanCommand === 'tell me the date') {
+    return { success: true, response: `Today is ${new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}` };
+  }
+  
+  // Greeting commands
+  if (cleanCommand === 'hello' || cleanCommand === 'hi' || cleanCommand === 'hey') {
     return { 
       success: true, 
       response: "Hello! How can I assist you today?" 
     };
   }
   
+  // Identity commands
   if (cleanCommand.includes('who are you') || cleanCommand.includes('tell me about yourself')) {
     return {
       success: true,
@@ -313,6 +388,7 @@ ipcMain.handle('execute-command', async (event, command) => {
     };
   }
   
+  // Volume controls
   if (cleanCommand === 'volume up') {
     // Platform-specific volume control would go here
     return { success: true, response: "Increasing volume." };
@@ -330,14 +406,16 @@ ipcMain.handle('execute-command', async (event, command) => {
     };
   }
   
+  // Exit commands
   if (cleanCommand.includes('goodbye') || cleanCommand.includes('bye') || cleanCommand === 'exit') {
     // Could trigger app closure here
     return {
       success: true,
-      response: "Goodbye. I'll be here when you need me."
+      response: emisConfig.personality.farewell || "Goodbye. I'll be here when you need me."
     };
   }
   
+  // Weather queries (placeholder)
   if (cleanCommand.includes('weather')) {
     // This would ideally connect to a weather API
     return {
@@ -346,13 +424,17 @@ ipcMain.handle('execute-command', async (event, command) => {
     };
   }
   
-  if (cleanCommand.includes('joke')) {
+  // Jokes
+  if (cleanCommand.includes('joke') || cleanCommand.includes('tell me something funny')) {
     const jokes = [
       "Why don't scientists trust atoms? Because they make up everything!",
       "Did you hear about the mathematician who's afraid of negative numbers? He'll stop at nothing to avoid them.",
       "Why was the computer cold? It left its Windows open!",
       "What do you call an AI that sings? Artificial harmonies.",
-      "How does a non-binary person greet you? 'Hello, my pronouns are they/them.'"
+      "How does a non-binary person greet you? 'Hello, my pronouns are they/them.'",
+      "Why did the developer go broke? They used up all their cache!",
+      "What's a computer's favorite snack? Microchips!",
+      "Why do programmers prefer dark mode? Because light attracts bugs!"
     ];
     
     return {
@@ -361,6 +443,7 @@ ipcMain.handle('execute-command', async (event, command) => {
     };
   }
   
+  // Identity/gender queries
   if (cleanCommand.includes('identity') || cleanCommand.includes('gender')) {
     return {
       success: true,
@@ -368,9 +451,35 @@ ipcMain.handle('execute-command', async (event, command) => {
     };
   }
   
+  // System information
+  if (cleanCommand.includes('system info') || cleanCommand.includes('about this computer')) {
+    // This would be expanded to get actual system info
+    return {
+      success: true,
+      response: `I'm running on ${process.platform} with Node.js ${process.version} and Electron.`
+    };
+  }
+  
+  // Settings
+  if (cleanCommand.includes('settings') || cleanCommand.includes('preferences')) {
+    return {
+      success: true,
+      response: "You can access my settings by clicking the gear icon in the upper right corner of the window."
+    };
+  }
+  
+  // Help command
+  if (cleanCommand === 'help' || cleanCommand === 'what can you do') {
+    return {
+      success: true,
+      response: "I can help with various tasks like opening applications, telling time and date, answering questions, and more. Just speak naturally, and I'll do my best to assist you."
+    };
+  }
+  
+  // Unknown command fallback
   return { 
     success: false, 
-    response: emisConfig.personality.unknownCommand 
+    response: emisConfig.personality.unknownCommand || "I'm sorry, I didn't understand that command." 
   };
 });
 

@@ -1,4 +1,4 @@
-// renderer.js - Fixed speech recognition with network error handling
+// renderer.js - Enhanced speech recognition with improved voice selection logic
 
 // Elements
 const startBtn = document.getElementById('start-btn');
@@ -64,6 +64,11 @@ let synth = window.speechSynthesis;
 let emisConfig = {
   wakeWord: 'emis',
   voice: 'default',
+  fallbackVoice: {
+    name: 'Google US English Female',
+    lang: 'en-US',
+    localService: false
+  },
   volume: 0.8
 };
 let usingFallbackMode = false;
@@ -71,6 +76,7 @@ let shouldRestartRecognition = false;
 let networkErrorCount = 0;
 let voiceSynthesisErrorCount = 0;
 let voicesLoaded = false;
+let availableVoices = [];
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -108,6 +114,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadVoices();
   
   // Ensure voices get loaded with a fallback
+  if (synth.onvoiceschanged !== undefined) {
+    synth.onvoiceschanged = loadVoices;
+  }
+  
   setTimeout(() => {
     if (!voicesLoaded) {
       console.log('Voices still not loaded after timeout, trying again...');
@@ -125,6 +135,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     emisConfig = await window.electronAPI.getConfig();
     console.log('Config loaded:', emisConfig);
     updateUIFromConfig();
+    
+    // Try to get cloud TTS voices from Google if available
+    try {
+      const voiceResult = await window.electronAPI.getTtsVoices();
+      if (voiceResult.success && voiceResult.voices && voiceResult.voices.length > 0) {
+        console.log('Cloud TTS voices available:', voiceResult.voices.length);
+        
+        // Add cloud voices to the dropdown with a special prefix
+        voiceResult.voices.forEach(voice => {
+          const option = document.createElement('option');
+          option.value = voice.name;
+          option.textContent = `☁️ ${voice.name}`;
+          option.dataset.isCloud = 'true';
+          voiceSelect.appendChild(option);
+        });
+      }
+    } catch (error) {
+      console.log('Cloud TTS not available:', error);
+    }
   } catch (error) {
     console.error('Error getting config:', error);
     updateStatus('Error loading config');
@@ -153,6 +182,14 @@ function initSpeechRecognition() {
     console.error('Speech Recognition API not supported');
     updateStatus('Speech recognition not supported');
     usingFallbackMode = true;
+    networkErrorContainer.style.display = 'block';
+    networkErrorContainer.innerHTML = `
+      <p style="margin: 0; color: #cc0000;">
+        <strong>Speech Recognition Not Available:</strong> 
+        Your browser doesn't support speech recognition.
+        Please use text input instead.
+      </p>
+    `;
     return false;
   }
   
@@ -307,7 +344,6 @@ async function processCommand(command) {
   const cleanCommand = command.toLowerCase().trim();
   console.log('Processing command:', cleanCommand);
   
-  // Check for wake word if not already actively processing commands
   // Skip wake word check for manual input
   const skipWakeWordCheck = !isListening;
   
@@ -346,11 +382,15 @@ async function processCommand(command) {
   }
   
   updateStatus('Processing...');
+  visualizer.classList.remove('listening');
+  visualizer.classList.add('processing');
   
   try {
     // Send command to main process
     console.log('Sending command to main process:', commandWithoutWake);
     const result = await window.electronAPI.executeCommand(commandWithoutWake);
+    
+    visualizer.classList.remove('processing');
     
     if (result.success) {
       updateStatus('Command executed');
@@ -390,6 +430,7 @@ async function processCommand(command) {
   } catch (error) {
     console.error('Error executing command:', error);
     updateStatus('Error');
+    visualizer.classList.remove('processing');
     
     const errorMessage = "I'm sorry, I encountered an error while processing your request.";
     responseText.textContent = errorMessage;
@@ -423,44 +464,130 @@ function speakWithPromise(text) {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.volume = emisConfig.volume;
       
-      // Set voice if specified and available
+      // Enhanced voice selection logic
+      const voices = synth.getVoices();
+      let voiceFound = false;
+      
+      // First try the specified voice
       if (emisConfig.voice !== 'default') {
-        const voices = synth.getVoices();
-        const selectedVoice = voices.find(voice => voice.name === emisConfig.voice);
-        if (selectedVoice) utterance.voice = selectedVoice;
+        // Check if this is a cloud voice (starts with 'en-US' or similar pattern)
+        if (emisConfig.voice.match(/^[a-z]{2}-[A-Z]{2}/)) {
+          // This is likely a cloud voice, try Google Cloud TTS
+          window.electronAPI.synthesizeSpeech(text)
+            .then(result => {
+              if (result.success) {
+                // Cloud TTS successful, resolve the promise
+                console.log('Used cloud TTS successfully');
+                visualizer.classList.remove('speaking');
+                if (isListening) visualizer.classList.add('listening');
+                resolve();
+              } else {
+                // Fall back to browser TTS
+                console.log('Cloud TTS failed, falling back to browser TTS');
+                continueWithBrowserTTS();
+              }
+            })
+            .catch(error => {
+              console.error('Cloud TTS error, falling back to browser TTS:', error);
+              continueWithBrowserTTS();
+            });
+          
+          // Add speaking visual indication
+          visualizer.classList.add('speaking');
+          visualizer.classList.remove('listening');
+          
+          // Don't continue with browser TTS yet, wait for cloud TTS result
+          return;
+        } else {
+          // Try to find the specified voice in browser voices
+          const selectedVoice = voices.find(voice => voice.name === emisConfig.voice);
+          if (selectedVoice) {
+            utterance.voice = selectedVoice;
+            voiceFound = true;
+          }
+        }
       }
       
-      utterance.onstart = () => {
-        console.log('Speech started');
-        visualizer.classList.add('speaking');
-        visualizer.classList.remove('listening');
-      };
+      // Continue with browser TTS
+      continueWithBrowserTTS();
       
-      utterance.onend = () => {
-        console.log('Speech ended');
-        visualizer.classList.remove('speaking');
-        if (isListening) visualizer.classList.add('listening');
-        resolve();
-      };
-      
-      utterance.onerror = (event) => {
-        console.error('Speech synthesis error:', event);
-        handleVoiceSynthesisError(event);
-        visualizer.classList.remove('speaking');
-        if (isListening) visualizer.classList.add('listening');
-        // Still resolve since we want to continue execution
-        resolve();
-      };
-      
-      synth.speak(utterance);
-      
-      // Safety fallback - resolve after max speech time if speech fails to trigger onend
-      setTimeout(() => {
-        if (synth.speaking) {
-          console.warn('Speech did not complete in expected time, forcing continue');
-          resolve();
+      function continueWithBrowserTTS() {
+        // If specified voice not found, try to find a voice matching the fallback criteria
+        if (!voiceFound && emisConfig.fallbackVoice) {
+          const fallbackVoice = voices.find(voice => 
+            (voice.name.includes('Female') || 
+             voice.name.includes('female') || 
+             voice.name.includes('-F')) && 
+            voice.lang.startsWith('en') &&
+            !voice.localService // Prefer cloud/neural voices
+          );
+          
+          if (fallbackVoice) {
+            utterance.voice = fallbackVoice;
+            voiceFound = true;
+            console.log('Using fallback voice:', fallbackVoice.name);
+          }
         }
-      }, 10000); // 10 second max speech time
+        
+        // If still no voice found, use the first available female English voice
+        if (!voiceFound) {
+          const anyFemaleVoice = voices.find(voice => 
+            (voice.name.includes('Female') || 
+             voice.name.includes('female') || 
+             voice.name.includes('-F') ||
+             voice.name.includes('f')) && 
+            voice.lang.startsWith('en')
+          );
+          
+          if (anyFemaleVoice) {
+            utterance.voice = anyFemaleVoice;
+            console.log('Using backup female voice:', anyFemaleVoice.name);
+          } else if (voices.length > 0) {
+            // Last resort: use any English voice
+            const anyEnglishVoice = voices.find(voice => voice.lang.startsWith('en'));
+            if (anyEnglishVoice) {
+              utterance.voice = anyEnglishVoice;
+              console.log('Using any English voice:', anyEnglishVoice.name);
+            } else {
+              // Very last resort: use the first available voice
+              utterance.voice = voices[0];
+              console.log('Using first available voice:', voices[0].name);
+            }
+          }
+        }
+        
+        utterance.onstart = () => {
+          console.log('Speech started');
+          visualizer.classList.add('speaking');
+          visualizer.classList.remove('listening');
+        };
+        
+        utterance.onend = () => {
+          console.log('Speech ended');
+          visualizer.classList.remove('speaking');
+          if (isListening) visualizer.classList.add('listening');
+          resolve();
+        };
+        
+        utterance.onerror = (event) => {
+          console.error('Speech synthesis error:', event);
+          handleVoiceSynthesisError(event);
+          visualizer.classList.remove('speaking');
+          if (isListening) visualizer.classList.add('listening');
+          // Still resolve since we want to continue execution
+          resolve();
+        };
+        
+        synth.speak(utterance);
+        
+        // Safety fallback - resolve after max speech time if speech fails to trigger onend
+        setTimeout(() => {
+          if (synth.speaking) {
+            console.warn('Speech did not complete in expected time, forcing continue');
+            resolve();
+          }
+        }, 10000); // 10 second max speech time
+      }
     } catch (error) {
       console.error('Error with speech synthesis:', error);
       handleVoiceSynthesisError(error);
@@ -486,45 +613,123 @@ function speak(text, callback) {
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.volume = emisConfig.volume;
     
-    // Set voice if specified and available
+    // Enhanced voice selection logic
+    const voices = synth.getVoices();
+    let voiceFound = false;
+    
+    // First try the specified voice
     if (emisConfig.voice !== 'default') {
-      const voices = synth.getVoices();
-      const selectedVoice = voices.find(voice => voice.name === emisConfig.voice);
-      if (selectedVoice) utterance.voice = selectedVoice;
+      // Check if this is a cloud voice (starts with 'en-US' or similar pattern)
+      if (emisConfig.voice.match(/^[a-z]{2}-[A-Z]{2}/)) {
+        // This is likely a cloud voice, try Google Cloud TTS
+        window.electronAPI.synthesizeSpeech(text)
+          .then(result => {
+            if (result.success) {
+              // Cloud TTS successful
+              console.log('Used cloud TTS successfully');
+              if (callback) callback();
+            } else {
+              // Fall back to browser TTS
+              console.log('Cloud TTS failed, falling back to browser TTS');
+              continueBrowserTTS();
+            }
+          })
+          .catch(error => {
+            console.error('Cloud TTS error, falling back to browser TTS:', error);
+            continueBrowserTTS();
+          });
+        
+        return;
+      } else {
+        // Try to find the specified voice in browser voices
+        const selectedVoice = voices.find(voice => voice.name === emisConfig.voice);
+        if (selectedVoice) {
+          utterance.voice = selectedVoice;
+          voiceFound = true;
+        }
+      }
     }
     
-    utterance.onstart = () => {
-      console.log('Speech started');
-      visualizer.classList.add('speaking');
-      visualizer.classList.remove('listening');
-    };
+    continueBrowserTTS();
     
-    utterance.onend = () => {
-      console.log('Speech ended');
-      visualizer.classList.remove('speaking');
-      if (isListening) visualizer.classList.add('listening');
-      
-      if (callback) callback();
-    };
-    
-    utterance.onerror = (event) => {
-      console.error('Speech synthesis error:', event);
-      handleVoiceSynthesisError(event);
-      visualizer.classList.remove('speaking');
-      if (isListening) visualizer.classList.add('listening');
-      
-      if (callback) callback();
-    };
-    
-    synth.speak(utterance);
-    
-    // Safety fallback
-    setTimeout(() => {
-      if (synth.speaking && callback) {
-        console.warn('Speech taking too long, calling callback anyway');
-        callback();
+    function continueBrowserTTS() {
+      // If specified voice not found, try to find a voice matching the fallback criteria
+      if (!voiceFound && emisConfig.fallbackVoice) {
+        const fallbackVoice = voices.find(voice => 
+          (voice.name.includes('Female') || 
+           voice.name.includes('female') || 
+           voice.name.includes('-F')) && 
+          voice.lang.startsWith('en') &&
+          !voice.localService // Prefer cloud/neural voices
+        );
+        
+        if (fallbackVoice) {
+          utterance.voice = fallbackVoice;
+          voiceFound = true;
+          console.log('Using fallback voice:', fallbackVoice.name);
+        }
       }
-    }, 10000);
+      
+      // If still no voice found, use the first available female English voice
+      if (!voiceFound) {
+        const anyFemaleVoice = voices.find(voice => 
+          (voice.name.includes('Female') || 
+           voice.name.includes('female') || 
+           voice.name.includes('-F') ||
+           voice.name.includes('f')) && 
+          voice.lang.startsWith('en')
+        );
+        
+        if (anyFemaleVoice) {
+          utterance.voice = anyFemaleVoice;
+          console.log('Using backup female voice:', anyFemaleVoice.name);
+        } else if (voices.length > 0) {
+          // Last resort: use any English voice
+          const anyEnglishVoice = voices.find(voice => voice.lang.startsWith('en'));
+          if (anyEnglishVoice) {
+            utterance.voice = anyEnglishVoice;
+            console.log('Using any English voice:', anyEnglishVoice.name);
+          } else {
+            // Very last resort: use the first available voice
+            utterance.voice = voices[0];
+            console.log('Using first available voice:', voices[0].name);
+          }
+        }
+      }
+      
+      utterance.onstart = () => {
+        console.log('Speech started');
+        visualizer.classList.add('speaking');
+        visualizer.classList.remove('listening');
+      };
+      
+      utterance.onend = () => {
+        console.log('Speech ended');
+        visualizer.classList.remove('speaking');
+        if (isListening) visualizer.classList.add('listening');
+        
+        if (callback) callback();
+      };
+      
+      utterance.onerror = (event) => {
+        console.error('Speech synthesis error:', event);
+        handleVoiceSynthesisError(event);
+        visualizer.classList.remove('speaking');
+        if (isListening) visualizer.classList.add('listening');
+        
+        if (callback) callback();
+      };
+      
+      synth.speak(utterance);
+      
+      // Safety fallback
+      setTimeout(() => {
+        if (synth.speaking && callback) {
+          console.warn('Speech taking too long, calling callback anyway');
+          callback();
+        }
+      }, 10000);
+    }
   } catch (error) {
     console.error('Error with speech synthesis:', error);
     handleVoiceSynthesisError(error);
@@ -559,22 +764,87 @@ function updateStatus(status) {
 function loadVoices() {
   console.log('Loading voices...');
   
-  // Clear existing options
+  // Clear existing options except the first default option
   while (voiceSelect.options.length > 1) {
     voiceSelect.options.remove(1);
   }
   
-  // Get and add voices
+  // Get and add browser voices
   const voices = synth.getVoices();
-  console.log('Available voices:', voices.length);
+  console.log('Available browser voices:', voices.length);
+  
+  // Store voices for later use
+  availableVoices = voices;
   
   if (voices.length > 0) {
-    voices.forEach(voice => {
+    // First add female English voices (preferred)
+    const femaleEnglishVoices = voices.filter(voice => 
+      (voice.name.includes('Female') || 
+       voice.name.includes('female') || 
+       voice.name.includes('-F') ||
+       voice.name.includes('f')) && 
+      voice.lang.startsWith('en')
+    );
+    
+    femaleEnglishVoices.forEach(voice => {
       const option = document.createElement('option');
       option.value = voice.name;
       option.textContent = `${voice.name} (${voice.lang})`;
+      if (!voice.localService) {
+        option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
+      }
       voiceSelect.appendChild(option);
     });
+    
+    // Then add other English voices
+    const otherEnglishVoices = voices.filter(voice => 
+      voice.lang.startsWith('en') && 
+      !femaleEnglishVoices.includes(voice)
+    );
+    
+    if (otherEnglishVoices.length > 0) {
+      // Add a separator
+      const separator = document.createElement('option');
+      separator.disabled = true;
+      separator.textContent = '──────────────';
+      voiceSelect.appendChild(separator);
+      
+      // Add the other English voices
+      otherEnglishVoices.forEach(voice => {
+        const option = document.createElement('option');
+        option.value = voice.name;
+        option.textContent = `${voice.name} (${voice.lang})`;
+        if (!voice.localService) {
+          option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
+        }
+        voiceSelect.appendChild(option);
+      });
+    }
+    
+    // Finally add all other voices if any
+    const otherVoices = voices.filter(voice => 
+      !voice.lang.startsWith('en')
+    );
+    
+    if (otherVoices.length > 0) {
+      // Add a separator
+      const separator = document.createElement('option');
+      separator.disabled = true;
+      separator.textContent = '──────────────';
+      voiceSelect.appendChild(separator);
+      
+      // Add the other voices
+      otherVoices.forEach(voice => {
+        const option = document.createElement('option');
+        option.value = voice.name;
+        option.textContent = `${voice.name} (${voice.lang})`;
+        if (!voice.localService) {
+          option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
+        }
+        voiceSelect.appendChild(option);
+      });
+    }
+    
     voicesLoaded = true;
   } else {
     // Add at least one dummy option
@@ -582,20 +852,6 @@ function loadVoices() {
     option.value = "default";
     option.textContent = "Default Voice";
     voiceSelect.appendChild(option);
-    
-    // Handle delayed voice loading in some browsers
-    synth.onvoiceschanged = () => {
-      console.log('Voices changed event triggered');
-      loadVoices();
-    };
-    
-    // Fallback for browsers where onvoiceschanged may not fire
-    setTimeout(() => {
-      const voices = synth.getVoices();
-      if (voices.length > 0 && !voicesLoaded) {
-        loadVoices();
-      }
-    }, 1000);
   }
 }
 
@@ -614,6 +870,21 @@ function updateUIFromConfig() {
     }
   }
 }
+
+// Add CSS for processing animation
+const styleElement = document.createElement('style');
+styleElement.textContent = `
+  @keyframes processing {
+    0% { transform: scale(1); background: linear-gradient(135deg, var(--secondary-color), var(--accent-color)); }
+    50% { transform: scale(1.03); background: linear-gradient(135deg, var(--accent-color), var(--primary-color)); }
+    100% { transform: scale(1); background: linear-gradient(135deg, var(--secondary-color), var(--accent-color)); }
+  }
+  
+  .emis-visualizer.processing {
+    animation: processing 1.2s infinite;
+  }
+`;
+document.head.appendChild(styleElement);
 
 // Event listeners
 startBtn.addEventListener('click', () => {
