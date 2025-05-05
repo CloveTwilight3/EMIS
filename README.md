@@ -33,7 +33,7 @@ EMIS (Emotive Machine Intelligence System) is a desktop voice assistant built wi
 > "Hello. EMIS online and ready to assist." - EMIS
 
 <p align="center">
-  <img src="https://via.placeholder.com/800x450?text=EMIS+Screenshot" alt="EMIS Interface Screenshot">
+  <img src="https://github.com/CloveTwilight3/EMIS/blob/main/assets/interface.png" alt="EMIS Interface Screenshot">
 </p>
 
 ## Lore
