@@ -10,6 +10,7 @@
     "build": "electron-builder build",
     "build:win": "electron-builder build --win",
     "build:linux": "electron-builder build --linux",
+    "build:mac": "electron-builder build --mac",
     "build:deb": "electron-builder build --linux deb",
     "build:rpm": "electron-builder build --linux rpm",
     "build:appimage": "electron-builder build --linux AppImage",
@@ -91,6 +92,12 @@
         "Comment": "Voice-activated transfeminine AI assistant",
         "Categories": "Utility;Accessibility;"
       }
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg", "zip"],
+      "icon": "build/icon.icns",
+      "artifactName": "${productName}-${version}-mac.${ext}"
     },
     "deb": {
       "depends": [

@@ -84,7 +84,7 @@ Example phrases:
 - **Voice Response** - Hear EMIS respond with natural voice synthesis
 - **Visual Interface** - See when EMIS is listening and processing
 - **Customizable Settings** - Configure wake word, voice, and volume
-- **Cross-Platform** - Windows support (Mac and Linux planned)
+- **Cross-Platform** - Windows and Linux support (macOS coming soon)
 
 ## Installation
 
@@ -93,7 +93,42 @@ Example phrases:
 - [Node.js](https://nodejs.org/) (v16 or later)
 - [npm](https://www.npmjs.com/) (comes with Node.js)
 
-### Quick Install
+### Pre-built Packages
+
+EMIS is available as pre-built packages for different platforms, making it easy to install without building from source.
+
+#### Windows
+
+- **Installer**: Download the `EMIS-0.1.0-win-x64.exe` installer and run it to install EMIS
+- **Portable**: Download `EMIS-0.1.0-portable.exe` if you prefer a portable version with no installation required
+
+#### Linux
+
+- **AppImage** (Universal Linux Format):
+  ```bash
+  # Make it executable
+  chmod +x EMIS-0.1.0-linux-x86_64.AppImage
+  # Run it
+  ./EMIS-0.1.0-linux-x86_64.AppImage
+  ```
+
+- **Debian/Ubuntu**:
+  ```bash
+  sudo dpkg -i EMIS-0.1.0-linux-amd64.deb
+  # If there are dependency issues
+  sudo apt-get install -f
+  ```
+
+- **Fedora/CentOS/RHEL**:
+  ```bash
+  sudo rpm -i EMIS-0.1.0-linux-x86_64.rpm
+  ```
+
+#### macOS
+
+**COMING SOON!** We're working on bringing EMIS to macOS. Stay tuned for updates.
+
+### Building from Source
 
 ```bash
 # Clone the repository
@@ -105,17 +140,22 @@ npm install
 
 # Start the application
 npm start
+
+# Or build for your platform
+npm run build
 ```
 
-### For Developers
+For developers who want to build packages for different platforms:
 
 ```bash
-# Start in development mode
-npm run dev
+# Build for Windows
+npm run build:win
 
-# For Windows development mode
-npm run dev-win
+# Build for Linux (creates AppImage, deb, and rpm)
+npm run build:all-linux
 ```
+
+Built packages will be available in the `dist` folder.
 
 ## Usage
 
@@ -166,9 +206,8 @@ emis-assistant/
 npm run build
 
 # Build for specific platforms
-npm run build-win     # Windows
-npm run build-mac     # macOS
-npm run build-linux   # Linux
+npm run build:win     # Windows
+npm run build:linux   # Linux
 ```
 
 Built packages will be available in the `dist` folder.
@@ -224,7 +263,7 @@ For deeper OS integration, explore:
 ## Roadmap
 
 - **Natural Language Processing** - Enhanced command understanding
-- **Mac and Linux Support** - Full cross-platform compatibility
+- **Mac Support** - Complete cross-platform compatibility
 - **Extended Capabilities**:
   - Calendar integration
   - Web searches
