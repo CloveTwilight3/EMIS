@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![EMIS Logo](https://via.placeholder.com/150?text=EMIS)
+![EMIS Logo](https://github.com/CloveTwilight3/EMIS/blob/main/assets/image.png)
 
 A voice-activated transfeminine AI assistant for your desktop
 
