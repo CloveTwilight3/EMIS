@@ -6,6 +6,11 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const util = require('util');
 
+// Disable GPU acceleration to avoid crashes
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('disable-gpu');
+app.commandLine.appendSwitch('disable-gpu-compositing');
+
 // Add the TTS Service class
 class TTSService {
   constructor(credentialsPath) {
@@ -14,7 +19,7 @@ class TTSService {
       const textToSpeech = require('@google-cloud/text-to-speech');
       
       // Initialize with Google Cloud credentials
-      this.client = new textToSpeechClient({
+      this.client = new textToSpeech.TextToSpeechClient({
         keyFilename: credentialsPath
       });
       
@@ -228,6 +233,7 @@ let emisConfig = {
     startMinimized: false,
     minimizeToTray: true,
     alwaysUseGoogleTTS: false,
+    fallbackToBrowser: true,
     logLevel: 'info'
   }
 };

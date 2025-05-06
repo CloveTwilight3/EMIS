@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>EMIS Microphone Test</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+      color: #333;
+      background-color: #f5f5f5;
+    }
+    h1 {
+      color: #6a0dad;
+      text-align: center;
+      margin-bottom: 5px;
+    }
+    h2 {
+      color: #9b59b6;
+      font-size: 1.2em;
+      text-align: center;
+      margin-top: 0;
+      margin-bottom: 20px;
+      font-weight: normal;
+    }
+    button {
+      background-color: #6a0dad;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 15px auto;
+      display: block;
+      transition: background-color 0.3s;
+    }
+    button:hover {
+      background-color: #9b59b6;
+    }
+    #result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 8px;
+      display: none;
+    }
+    .success {
+      background-color: #d4edda;
+      border: 1px solid #c3e6cb;
+      color: #155724;
+      display: block !important;
+    }
+    .error {
+      background-color: #f8d7da;
+      border: 1px solid #f5c6cb;
+      color: #721c24;
+      display: block !important;
+    }
+    .pending {
+      background-color: #fff3cd;
+      border: 1px solid #ffeeba;
+      color: #856404;
+      display: block !important;
+    }
+    .audio-data {
+      margin-top: 15px;
+      font-family: monospace;
+      background-color: #f8f9fa;
+      padding: 10px;
+      border-radius: 4px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .visualization {
+      width: 200px;
+      height: 200px;
+      margin: 20px auto;
+      position: relative;
+    }
+    .circle {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #9b59b6, #ff69b4);
+      position: absolute;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      font-size: 2em;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      pointer-events: none;
+    }
+    .logo {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 48px;
+      color: white;
+      font-weight: bold;
+      z-index: 2;
+    }
+  </style>
+</head>
+<body>
+  <h1>EMIS Microphone Test</h1>
+  <h2>Emotive Machine Intelligence System</h2>
+  
+  <div class="visualization">
+    <div class="circle"></div>
+    <canvas id="visualizer"></canvas>
+    <div class="logo">E</div>
+  </div>
+  
+  <button id="start-test">Start Microphone Test</button>
+  <div id="result">Test results will appear here...</div>
+  
+  <script>
+    // Elements
+    const startButton = document.getElementById('start-test');
+    const resultDiv = document.getElementById('result');
+    const visualizerCanvas = document.getElementById('visualizer');
+    const canvasCtx = visualizerCanvas.getContext('2d');
+    
+    // Set canvas size
+    visualizerCanvas.width = 200;
+    visualizerCanvas.height = 200;
+    
+    // Variables for audio visualization
+    let animationId = null;
+    let audioContext = null;
+    let analyser = null;
+    let dataArray = null;
+    
+    // Start test function
+    startButton.addEventListener('click', async () => {
+      // Reset and show result area
+      resultDiv.className = 'pending';
+      resultDiv.innerHTML = '<p>Testing microphone access...</p>';
+      resultDiv.style.display = 'block';
+      
+      try {
+        // Request microphone access
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } 
+        });
+        
+        // Set up audio context to analyze mic input
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        const bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        source.connect(analyser);
+        
+        // Start visualization
+        startVisualization();
+        
+        // Show success message
+        resultDiv.className = 'success';
+        resultDiv.innerHTML = 
+          '<p><strong>✅ SUCCESS:</strong> Microphone is working correctly!</p>' +
+          '<p>Audio data from your microphone:</p>' +
+          '<div class="audio-data" id="audio-data">Analyzing audio levels...</div>';
+        
+        // Display audio levels for 5 seconds
+        const audioDataDiv = document.getElementById('audio-data');
+        let counter = 5;
+        
+        const updateAudioData = () => {
+          analyser.getByteFrequencyData(dataArray);
+          
+          // Calculate average volume
+          let sum = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / bufferLength;
+          
+          // Display audio level
+          audioDataDiv.innerHTML = 
+            `Microphone level: ${Math.round(average)} / 255 ` +
+            '█'.repeat(Math.floor(average / 10)) +
+            '<br>Test completes in: ' + counter + ' seconds';
+          
+          counter--;
+          
+          if (counter >= 0) {
+            setTimeout(updateAudioData, 1000);
+          } else {
+            // Test complete
+            audioDataDiv.innerHTML += '<br><br><strong>Test completed successfully!</strong>';
+            
+            // Stop microphone
+            stream.getTracks().forEach(track => track.stop());
+            
+            // Stop visualization
+            if (animationId) {
+              cancelAnimationFrame(animationId);
+              animationId = null;
+            }
+            
+            // Display next steps
+            resultDiv.innerHTML += 
+              '<p><strong>Next steps:</strong></p>' +
+              '<ul>' +
+              '<li>Your microphone is working correctly with EMIS</li>' +
+              '<li>You can now close this window and start the main application</li>' +
+              '<li>Use the command: <code>npm start</code></li>' +
+              '</ul>';
+              
+            // Disable start button
+            startButton.disabled = true;
+            startButton.style.backgroundColor = '#cccccc';
+            startButton.textContent = 'Test Completed';
+          }
+        };
+        
+        updateAudioData();
+        
+      } catch (err) {
+        // Error handling
+        resultDiv.className = 'error';
+        resultDiv.innerHTML = 
+          `<p><strong>❌ ERROR:</strong> ${err.message}</p>` +
+          '<p><strong>Troubleshooting:</strong></p>' +
+          '<ul>' +
+          '<li>Make sure your microphone is properly connected</li>' +
+          '<li>Check browser/system permissions for microphone access</li>' +
+          '<li>Try restarting your computer if issues persist</li>' +
+          '<li>Ensure no other application is using your microphone</li>' +
+          '</ul>';
+      }
+    });
+    
+    // Function to start audio visualization
+    function startVisualization() {
+      function draw() {
+        animationId = requestAnimationFrame(draw);
+        
+        // Get audio data
+        analyser.getByteFrequencyData(dataArray);
+        
+        // Clear canvas
+        canvasCtx.clearRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+        
+        const centerX = visualizerCanvas.width / 2;
+        const centerY = visualizerCanvas.height / 2;
+        const radius = Math.min(centerX, centerY) - 10;
+        
+        // Draw circular visualizer
+        const barCount = dataArray.length;
+        const barWidth = (2 * Math.PI) / barCount;
+        
+        for (let i = 0; i < barCount; i++) {
+          const barHeight = dataArray[i] ? (dataArray[i] / 255) * radius / 2 : 1;
+          const angle = i * barWidth;
+          
+          // Calculate positions
+          const x1 = centerX + Math.cos(angle) * (radius - barHeight);
+          const y1 = centerY + Math.sin(angle) * (radius - barHeight);
+          const x2 = centerX + Math.cos(angle) * radius;
+          const y2 = centerY + Math.sin(angle) * radius;
+          
+          // Draw line
+          canvasCtx.beginPath();
+          canvasCtx.moveTo(x1, y1);
+          canvasCtx.lineTo(x2, y2);
+          canvasCtx.strokeStyle = `rgba(255, 105, 180, ${dataArray[i] / 255})`;
+          canvasCtx.lineWidth = 2;
+          canvasCtx.stroke();
+        }
+      }
+      
+      draw();
+    }
+  </script>
+</body>
+</html>

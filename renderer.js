@@ -375,8 +375,8 @@ function setupActivityDetection(source) {
           recognition.start();
         } catch (error) {
           console.error('Could not start speech recognition:', error);
-          // Fall back to manual input
-          fallbackToManualInput();
+          // Fall back to other methods
+          tryLocalSpeechToText(blob);
         }
       } else {
         // Try to use WebSocket based recognition or local library
@@ -462,36 +462,233 @@ function setupActivityDetection(source) {
 async function tryLocalSpeechToText(audioBlob) {
   console.log('Trying local speech-to-text options');
   
-  // Option 1: Use browser's native Speech Recognition API (if available)
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SpeechRecognition && !usingFallbackMode) {
-    try {
-      // We would need to play the audio and have the recognition listen
-      // This is complex and unreliable, so we'll skip to option 2
-      console.log('Native speech recognition not practical for recorded audio');
-    } catch (error) {
-      console.error('Native speech recognition failed:', error);
-    }
-  }
-  
-  // Option 2: Send to main process for server-based conversion
+  // Option 1: Try to use Google Cloud processing first
   try {
-    // Send to main process for Google Cloud processing
+    console.log('Attempting to use Google Cloud Speech API...');
     const result = await window.electronAPI.convertSpeechToText(audioBlob);
     if (result && result.success && result.transcript) {
-      console.log('Server speech-to-text successful');
+      console.log('Google Cloud speech-to-text successful');
       transcriptText.textContent = result.transcript;
       processCommand(result.transcript);
       return;
-    } else {
-      console.log('Server speech-to-text failed or not available');
-    }
+    } 
+    console.log('Google Cloud speech-to-text failed or not available, trying browser APIs');
   } catch (error) {
-    console.error('Server speech-to-text failed:', error);
+    console.error('Google Cloud speech-to-text failed:', error);
   }
   
-  // Option 3: Fall back to manual input
+  // Option 2: Try to use local keyword detection as a fallback
+  try {
+    console.log('Attempting basic keyword detection...');
+    // Create a simple list of possible commands for keyword matching
+    const keywords = [
+      { word: 'hello', command: 'hello' },
+      { word: 'hi', command: 'hello' },
+      { word: 'hey', command: 'hello' },
+      { word: 'time', command: 'what time is it' },
+      { word: 'date', command: 'what date is it' },
+      { word: 'day', command: 'what date is it' },
+      { word: 'open', command: 'open' },
+      { word: 'close', command: 'close' },
+      { word: 'weather', command: 'weather' },
+      { word: 'joke', command: 'tell me a joke' },
+      { word: 'about', command: 'tell me about yourself' },
+      { word: 'yourself', command: 'tell me about yourself' },
+      { word: 'who are you', command: 'tell me about yourself' },
+      { word: 'identity', command: 'identity' },
+      { word: 'gender', command: 'gender' },
+      { word: 'volume', command: 'volume' },
+      { word: 'up', command: 'volume up' },
+      { word: 'down', command: 'volume down' },
+      { word: 'louder', command: 'volume up' },
+      { word: 'quieter', command: 'volume down' },
+      { word: 'goodbye', command: 'goodbye' },
+      { word: 'bye', command: 'goodbye' },
+      { word: 'thanks', command: 'thank you' },
+      { word: 'thank you', command: 'thank you' },
+      { word: 'help', command: 'help' }
+    ];
+
+    // Record audio visually to show we're at least trying something
+    updateStatus('Trying keyword detection...');
+    
+    // Use browser's native Speech Recognition API (if available)
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      console.log('Browser speech recognition available, trying to use it...');
+      
+      try {
+        // Create a new recognition instance
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        
+        // Set up a promise to handle the recognition result
+        const recognitionPromise = new Promise((resolve, reject) => {
+          // Set timeout for recognition
+          const timeoutId = setTimeout(() => {
+            recognition.abort();
+            reject(new Error('Speech recognition timeout'));
+          }, 5000);
+          
+          recognition.onresult = (event) => {
+            clearTimeout(timeoutId);
+            const transcript = event.results[0][0].transcript;
+            console.log('Browser speech recognition result:', transcript);
+            resolve(transcript);
+          };
+          
+          recognition.onerror = (event) => {
+            clearTimeout(timeoutId);
+            console.error('Browser speech recognition error:', event.error);
+            reject(new Error(event.error));
+          };
+          
+          recognition.onend = () => {
+            clearTimeout(timeoutId);
+            reject(new Error('Speech recognition ended without results'));
+          };
+        });
+        
+        // Start recognition
+        recognition.start();
+        
+        try {
+          // Wait for recognition result
+          const transcript = await recognitionPromise;
+          console.log('Browser speech recognition successful:', transcript);
+          transcriptText.textContent = transcript;
+          processCommand(transcript);
+          return;
+        } catch (recognitionError) {
+          console.error('Browser speech recognition failed:', recognitionError);
+          // Continue to next option
+        }
+      } catch (setupError) {
+        console.error('Error setting up browser speech recognition:', setupError);
+      }
+    }
+    
+    // Option 3: Try manual inference from blob duration
+    try {
+      // Create audio element to check duration
+      const audioElement = new Audio();
+      audioElement.src = URL.createObjectURL(audioBlob);
+      
+      // Load audio to get duration
+      await new Promise(resolve => {
+        audioElement.onloadedmetadata = resolve;
+        audioElement.load();
+      });
+      
+      // If audio is very short (less than 1 second), it might be a simple command
+      if (audioElement.duration < 1) {
+        console.log('Short audio detected, might be a simple command');
+        // If extremely short, it might be "hey" or similar
+        if (audioElement.duration < 0.5) {
+          transcriptText.textContent = "hello";
+          processCommand("hello");
+          return;
+        }
+      }
+      
+      // If audio is medium length (1-2 seconds), it might be a simple phrase
+      if (audioElement.duration >= 1 && audioElement.duration < 2) {
+        console.log('Medium length audio detected, might be a simple phrase');
+        // Show possible commands to the user
+        const guessedCommands = [
+          "what time is it", 
+          "hello", 
+          "open [app]"
+        ];
+        
+        // Let the user pick from the list
+        showCommandOptions(guessedCommands);
+        return;
+      }
+    } catch (audioError) {
+      console.error('Error analyzing audio characteristics:', audioError);
+    }
+  } catch (keywordError) {
+    console.error('Error with keyword detection:', keywordError);
+  }
+  
+  // Final fallback: Use manual input
+  console.log('All speech recognition methods failed, falling back to manual input');
   fallbackToManualInput();
+}
+
+// Add this new function to renderer.js to help with command selection
+function showCommandOptions(commands) {
+  updateStatus('Please select what you said:');
+  
+  // Create a div for the options
+  const optionsDiv = document.createElement('div');
+  optionsDiv.className = 'command-options';
+  optionsDiv.style.marginTop = '10px';
+  optionsDiv.style.padding = '10px';
+  optionsDiv.style.backgroundColor = '#efefef';
+  optionsDiv.style.borderRadius = '5px';
+  
+  // Add header
+  const header = document.createElement('p');
+  header.textContent = 'Did you say one of these?';
+  header.style.fontWeight = 'bold';
+  optionsDiv.appendChild(header);
+  
+  // Add options
+  commands.forEach(cmd => {
+    const button = document.createElement('button');
+    button.textContent = cmd;
+    button.style.margin = '5px';
+    button.style.padding = '8px 12px';
+    button.style.backgroundColor = '#6a0dad';
+    button.style.color = 'white';
+    button.style.border = 'none';
+    button.style.borderRadius = '4px';
+    button.style.cursor = 'pointer';
+    
+    button.addEventListener('click', () => {
+      // Remove the options div
+      if (optionsDiv.parentNode) {
+        optionsDiv.parentNode.removeChild(optionsDiv);
+      }
+      
+      // Process the selected command
+      transcriptText.textContent = cmd;
+      processCommand(cmd);
+    });
+    
+    optionsDiv.appendChild(button);
+  });
+  
+  // Add a "None of these" button
+  const noneButton = document.createElement('button');
+  noneButton.textContent = "None of these";
+  noneButton.style.margin = '5px';
+  noneButton.style.padding = '8px 12px';
+  noneButton.style.backgroundColor = '#999999';
+  noneButton.style.color = 'white';
+  noneButton.style.border = 'none';
+  noneButton.style.borderRadius = '4px';
+  noneButton.style.cursor = 'pointer';
+  
+  noneButton.addEventListener('click', () => {
+    // Remove the options div
+    if (optionsDiv.parentNode) {
+      optionsDiv.parentNode.removeChild(optionsDiv);
+    }
+    
+    // Fall back to manual input
+    fallbackToManualInput();
+  });
+  
+  optionsDiv.appendChild(noneButton);
+  
+  // Add the options div after the transcript
+  const transcriptContainer = document.querySelector('.transcript');
+  transcriptContainer.appendChild(optionsDiv);
 }
 
 // Fall back to manual text input
@@ -501,8 +698,20 @@ function fallbackToManualInput() {
   
   // Show the manual input with prompt
   const manualInput = document.getElementById('manual-command-input');
-  manualInput.placeholder = "I heard something. What did you say?";
-  manualInput.focus();
+  if (manualInput) {
+    manualInput.placeholder = "What did you say? Type your command here";
+    manualInput.focus();
+    
+    // Add visual cue
+    manualInput.style.borderColor = '#ff69b4';
+    manualInput.style.boxShadow = '0 0 5px #ff69b4';
+    
+    // Reset style after 2 seconds
+    setTimeout(() => {
+      manualInput.style.borderColor = '';
+      manualInput.style.boxShadow = '';
+    }, 2000);
+  }
 }
 
 // Draw audio visualization
@@ -1014,16 +1223,63 @@ function loadVoices() {
   availableVoices = voices;
   
   if (voices.length > 0) {
-    // First add female English voices (preferred)
-    const femaleEnglishVoices = voices.filter(voice => 
-      (voice.name.includes('Female') || 
-       voice.name.includes('female') || 
-       voice.name.includes('-F') ||
-       voice.name.includes('f')) && 
-      voice.lang.startsWith('en')
-    );
+    addVoicesToSelect(voices);
+    voicesLoaded = true;
+  } else {
+    // Add at least one dummy option
+    const option = document.createElement('option');
+    option.value = "default";
+    option.textContent = "Default Voice";
+    voiceSelect.appendChild(option);
     
-    femaleEnglishVoices.forEach(voice => {
+    // Try again in a second (browsers sometimes load voices asynchronously)
+    setTimeout(() => {
+      const voices = synth.getVoices();
+      if (voices.length > 0 && !voicesLoaded) {
+        console.log('Voices loaded on retry:', voices.length);
+        addVoicesToSelect(voices);
+        voicesLoaded = true;
+      }
+    }, 1000);
+  }
+}
+
+// Helper function to add voices to select element
+function addVoicesToSelect(voices) {
+  // First add female English voices (preferred)
+  const femaleEnglishVoices = voices.filter(voice => 
+    (voice.name.includes('Female') || 
+     voice.name.includes('female') || 
+     voice.name.includes('-F') ||
+     voice.name.includes('f')) && 
+    voice.lang.startsWith('en')
+  );
+  
+  femaleEnglishVoices.forEach(voice => {
+    const option = document.createElement('option');
+    option.value = voice.name;
+    option.textContent = `${voice.name} (${voice.lang})`;
+    if (!voice.localService) {
+      option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
+    }
+    voiceSelect.appendChild(option);
+  });
+  
+  // Then add other English voices
+  const otherEnglishVoices = voices.filter(voice => 
+    voice.lang.startsWith('en') && 
+    !femaleEnglishVoices.includes(voice)
+  );
+  
+  if (otherEnglishVoices.length > 0) {
+    // Add a separator
+    const separator = document.createElement('option');
+    separator.disabled = true;
+    separator.textContent = '──────────────';
+    voiceSelect.appendChild(separator);
+    
+    // Add the other English voices
+    otherEnglishVoices.forEach(voice => {
       const option = document.createElement('option');
       option.value = voice.name;
       option.textContent = `${voice.name} (${voice.lang})`;
@@ -1032,63 +1288,30 @@ function loadVoices() {
       }
       voiceSelect.appendChild(option);
     });
+  }
+  
+  // Finally add all other voices if any
+  const otherVoices = voices.filter(voice => 
+    !voice.lang.startsWith('en')
+  );
+  
+  if (otherVoices.length > 0) {
+    // Add a separator
+    const separator = document.createElement('option');
+    separator.disabled = true;
+    separator.textContent = '──────────────';
+    voiceSelect.appendChild(separator);
     
-    // Then add other English voices
-    const otherEnglishVoices = voices.filter(voice => 
-      voice.lang.startsWith('en') && 
-      !femaleEnglishVoices.includes(voice)
-    );
-    
-    if (otherEnglishVoices.length > 0) {
-      // Add a separator
-      const separator = document.createElement('option');
-      separator.disabled = true;
-      separator.textContent = '──────────────';
-      voiceSelect.appendChild(separator);
-      
-      // Add the other English voices
-      otherEnglishVoices.forEach(voice => {
-        const option = document.createElement('option');
-        option.value = voice.name;
-        option.textContent = `${voice.name} (${voice.lang})`;
-        if (!voice.localService) {
-          option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
-        }
-        voiceSelect.appendChild(option);
-      });
-    }
-    
-    // Finally add all other voices if any
-    const otherVoices = voices.filter(voice => 
-      !voice.lang.startsWith('en')
-    );
-    
-    if (otherVoices.length > 0) {
-      // Add a separator
-      const separator = document.createElement('option');
-      separator.disabled = true;
-      separator.textContent = '──────────────';
-      voiceSelect.appendChild(separator);
-      
-      // Add the other voices
-      otherVoices.forEach(voice => {
-        const option = document.createElement('option');
-        option.value = voice.name;
-        option.textContent = `${voice.name} (${voice.lang})`;
-        if (!voice.localService) {
-          option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
-        }
-        voiceSelect.appendChild(option);
-      });
-    }
-    
-    voicesLoaded = true;
-  } else {
-    // Add at least one dummy option
-    const option = document.createElement('option');
-    option.value = "default";
-    option.textContent = "Default Voice";
-    voiceSelect.appendChild(option);
+    // Add the other voices
+    otherVoices.forEach(voice => {
+      const option = document.createElement('option');
+      option.value = voice.name;
+      option.textContent = `${voice.name} (${voice.lang})`;
+      if (!voice.localService) {
+        option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
+      }
+      voiceSelect.appendChild(option);
+    });
   }
 }
 

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "NODE_ENV=development electron .",
-    "dev-win": "set NODE_ENV=development && electron .",
+    "dev-win": "set NODE_ENV=development&& electron .",
     "build": "electron-builder build",
     "build:win": "electron-builder build --win",
     "build:linux": "electron-builder build --linux",
@@ -15,7 +15,7 @@
     "build:rpm": "electron-builder build --linux rpm",
     "build:appimage": "electron-builder build --linux AppImage",
     "build:all-linux": "electron-builder build --linux AppImage deb rpm",
-    "test-mic": "node tools/test-microphone.js",
+    "test-mic": "electron browser-mic-test.js",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
