@@ -507,8 +507,14 @@ ipcMain.handle('synthesize-speech', async (event, text) => {
   
   try {
     // Use current voice or default female voice
-    const voice = emisConfig.voice || 'en-US-Neural2-F';
+    const voice = emisConfig.voice || 'en-US-Standard-F'; // Changed to Standard-F
     const result = await ttsService.synthesizeSpeech(text, voice);
+    
+    // IMPORTANT NEW CODE: Send the audio file path to the renderer for playback
+    if (result.success && result.audioFile) {
+      event.sender.send('audio-file-ready', result.audioFile);
+    }
+    
     return result;
   } catch (error) {
     console.error('Speech synthesis error:', error);

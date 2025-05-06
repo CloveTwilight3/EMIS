@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   synthesizeSpeech: (text) => ipcRenderer.invoke('synthesize-speech', text),
   getTtsVoices: () => ipcRenderer.invoke('get-tts-voices'),
   
+  // NEW: Listen for audio file ready events
+  onAudioFileReady: (callback) => {
+    ipcRenderer.on('audio-file-ready', (event, filePath) => callback(filePath));
+  },
+  
   // Speech recognition controls
   startListening: () => ipcRenderer.invoke('start-listening'),
   stopListening: () => ipcRenderer.invoke('stop-listening'),

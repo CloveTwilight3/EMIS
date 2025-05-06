@@ -1,4 +1,4 @@
-// Enhanced renderer.js with improved speech recognition and error handling
+// Enhanced renderer.js with improved speech recognition and audio playback
 
 // Elements
 const startBtn = document.getElementById('start-btn');
@@ -103,6 +103,9 @@ let debugVisible = false;
 let debugLog = [];
 const MAX_DEBUG_ENTRIES = 100;
 
+// Currently playing audio element
+let currentAudio = null;
+
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
   logDebug('EMIS initializing...');
@@ -133,6 +136,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Check if WebRTC audio is supported
   const audioSupported = checkAudioSupport();
   logDebug(`WebRTC audio support: ${audioSupported}`);
+  
+  // Set up audio file playback listener
+  setupAudioFileListener();
   
   // Initial greeting
   const greeting = emisConfig.personality?.greeting || "Hello, I'm EMIS. How can I assist you today?";
@@ -209,6 +215,64 @@ function setupManualInput() {
       manualCommandBtn.click();
     }
   });
+}
+
+// Setup listener for audio file ready events from main process
+function setupAudioFileListener() {
+  window.electronAPI.onAudioFileReady((filePath) => {
+    logDebug(`Audio file ready for playback: ${filePath}`);
+    playAudioFile(filePath);
+  });
+}
+
+// Play audio file from path
+function playAudioFile(filePath) {
+  // Stop any currently playing audio
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
+  
+  // Create new audio element
+  const audio = new Audio(`file://${filePath}`);
+  currentAudio = audio;
+  
+  // Set volume from config
+  audio.volume = emisConfig.volume || 0.8;
+  
+  // Setup event handlers
+  audio.onplay = () => {
+    logDebug('Audio playback started');
+    visualizer.classList.add('speaking');
+    visualizer.classList.remove('listening');
+  };
+  
+  audio.onended = () => {
+    logDebug('Audio playback completed');
+    visualizer.classList.remove('speaking');
+    if (isListening) visualizer.classList.add('listening');
+    currentAudio = null;
+  };
+  
+  audio.onerror = (event) => {
+    logDebug(`Audio playback error: ${event.type}`, 'error');
+    console.error('Audio error details:', event);
+    visualizer.classList.remove('speaking');
+    if (isListening) visualizer.classList.add('listening');
+    currentAudio = null;
+  };
+  
+  // Play the audio
+  audio.play()
+    .then(() => {
+      logDebug('Audio playback started successfully');
+    })
+    .catch(error => {
+      logDebug(`Failed to play audio: ${error.message}`, 'error');
+      visualizer.classList.remove('speaking');
+      if (isListening) visualizer.classList.add('listening');
+      currentAudio = null;
+    });
 }
 
 // Load configuration
@@ -1127,17 +1191,26 @@ function speakWithPromise(text) {
       // Cancel any ongoing speech
       synth.cancel();
       
+      // Stop any currently playing audio
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio = null;
+      }
+      
       // Try to use Google Cloud TTS first if it's a cloud voice
-      if (emisConfig.voice && emisConfig.voice.match(/^[a-z]{2}-[A-Z]{2}/)) {
-        // This looks like a cloud voice ID (e.g., en-US-Neural2-F)
+      if (emisConfig.voice && (emisConfig.voice.match(/^[a-z]{2}-[A-Z]{2}/) || 
+          voiceSelect.querySelector(`option[value="${emisConfig.voice}"]`)?.dataset.isCloud === 'true')) {
+        // This looks like a cloud voice ID
         window.electronAPI.synthesizeSpeech(text)
           .then(result => {
             if (result.success) {
-              // Cloud TTS successful
-              logDebug('Used cloud TTS successfully');
-              visualizer.classList.remove('speaking');
-              if (isListening) visualizer.classList.add('listening');
-              resolve();
+              // Cloud TTS successful - audio will play via event listener
+              logDebug('Cloud TTS request sent successfully');
+              
+              // Set a timeout in case the audio playback event never fires
+              setTimeout(() => {
+                resolve();
+              }, 5000);
             } else {
               // Fall back to browser TTS
               logDebug(`Cloud TTS failed: ${result.error || 'Unknown error'}`, 'warn');
@@ -1148,10 +1221,6 @@ function speakWithPromise(text) {
             logDebug(`Cloud TTS error: ${error.message}`, 'error');
             continueBrowserTTS();
           });
-        
-        // Add speaking visual indication
-        visualizer.classList.add('speaking');
-        visualizer.classList.remove('listening');
         
         return;
       } else {
@@ -1314,6 +1383,11 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (synth) {
       synth.cancel();
+    }
+    
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
     }
   });
   
