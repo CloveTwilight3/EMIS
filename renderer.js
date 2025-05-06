@@ -1,4 +1,4 @@
-// renderer.js - Enhanced with WebRTC Audio Capture and Speech-to-Text
+// Enhanced renderer.js with improved speech recognition and error handling
 
 // Elements
 const startBtn = document.getElementById('start-btn');
@@ -25,7 +25,7 @@ manualCommandContainer.innerHTML = `
   </div>
 `;
 
-// Create audio capture notification
+// Create audio status indicator
 const audioStatusContainer = document.createElement('div');
 audioStatusContainer.style.padding = '10px';
 audioStatusContainer.style.marginBottom = '10px';
@@ -40,23 +40,29 @@ audioStatusContainer.innerHTML = `
   </p>
 `;
 
-// Create voice synthesis fallback message
-const voiceSynthesisErrorContainer = document.createElement('div');
-voiceSynthesisErrorContainer.style.display = 'none';
-voiceSynthesisErrorContainer.style.padding = '10px';
-voiceSynthesisErrorContainer.style.marginBottom = '10px';
-voiceSynthesisErrorContainer.style.backgroundColor = '#ffffee';
-voiceSynthesisErrorContainer.style.border = '1px solid #eeeebb';
-voiceSynthesisErrorContainer.style.borderRadius = '4px';
-voiceSynthesisErrorContainer.innerHTML = `
-  <p style="margin: 0; color: #776600;">
-    <strong>Voice Synthesis Issue:</strong> 
-    EMIS might not be able to speak responses aloud.
-    Responses will still be displayed as text.
-  </p>
+// Create debug panel for troubleshooting
+const debugPanel = document.createElement('div');
+debugPanel.style.display = 'none';
+debugPanel.style.padding = '10px';
+debugPanel.style.marginTop = '20px';
+debugPanel.style.backgroundColor = '#f8f8f8';
+debugPanel.style.border = '1px solid #ddd';
+debugPanel.style.borderRadius = '4px';
+debugPanel.innerHTML = `
+  <h3>Debug Information</h3>
+  <div id="debug-info" style="font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto;">
+    [DEBUG] EMIS starting up...
+  </div>
+  <button id="debug-toggle-btn" style="margin-top: 10px;">Show/Hide Debug Info</button>
+  <button id="debug-clear-btn" style="margin-top: 10px; margin-left: 10px;">Clear</button>
+  <div style="margin-top: 10px;">
+    <label for="debug-speech-threshold">Speech Detection Threshold:</label>
+    <input type="range" id="debug-speech-threshold" min="5" max="50" value="15" style="width: 100%;">
+    <span id="threshold-value">15</span>
+  </div>
 `;
 
-// Create audio visualizer canvas
+// Create canvas for audio visualization
 const visualizerCanvas = document.createElement('canvas');
 visualizerCanvas.style.position = 'absolute';
 visualizerCanvas.style.top = '0';
@@ -70,7 +76,7 @@ visualizerCanvas.style.opacity = '0.7';
 // Add canvas to visualizer
 visualizer.appendChild(visualizerCanvas);
 
-// State
+// State variables
 let isListening = false;
 let audioContext = null;
 let audioStream = null;
@@ -88,27 +94,104 @@ let emisConfig = {
     lang: 'en-US',
     localService: false
   },
-  volume: 0.8
+  volume: 0.8,
+  speechThreshold: 15 // Volume threshold for speech detection
 };
-let usingFallbackMode = false;
-let voiceSynthesisErrorCount = 0;
-let voicesLoaded = false;
-let availableVoices = [];
 
-// Initialize
+// Debug variables
+let debugVisible = false;
+let debugLog = [];
+const MAX_DEBUG_ENTRIES = 100;
+
+// Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
-  console.log('EMIS initializing...');
+  logDebug('EMIS initializing...');
   updateStatus('Initializing...');
   
-  // Add text input as an alternative option
+  // Add UI elements
   const controlsDiv = document.querySelector('.controls');
   controlsDiv.appendChild(manualCommandContainer);
-  
-  // Add status containers
   controlsDiv.insertBefore(audioStatusContainer, controlsDiv.firstChild);
-  controlsDiv.insertBefore(voiceSynthesisErrorContainer, controlsDiv.firstChild);
+  controlsDiv.appendChild(debugPanel);
   
-  // Set up manual command input
+  // Set up manual input
+  setupManualInput();
+  
+  // Set up debug tools
+  setupDebugTools();
+  
+  // Load voices and config
+  await Promise.all([
+    loadVoices(),
+    loadConfig()
+  ]);
+  
+  // Set up browser speech recognition
+  const recognitionAvailable = initSpeechRecognition();
+  logDebug(`Browser speech recognition available: ${recognitionAvailable}`);
+  
+  // Check if WebRTC audio is supported
+  const audioSupported = checkAudioSupport();
+  logDebug(`WebRTC audio support: ${audioSupported}`);
+  
+  // Initial greeting
+  const greeting = emisConfig.personality?.greeting || "Hello, I'm EMIS. How can I assist you today?";
+  responseText.textContent = greeting;
+  
+  speakWithPromise(greeting)
+    .catch(error => logDebug(`Initial greeting speech error: ${error.message}`, 'error'));
+});
+
+// Debug logging function
+function logDebug(message, level = 'info') {
+  const timestamp = new Date().toLocaleTimeString();
+  const logEntry = `[${timestamp}][${level.toUpperCase()}] ${message}`;
+  
+  // Add to debug log
+  debugLog.unshift(logEntry);
+  
+  // Trim log if too long
+  if (debugLog.length > MAX_DEBUG_ENTRIES) {
+    debugLog = debugLog.slice(0, MAX_DEBUG_ENTRIES);
+  }
+  
+  // Update debug panel if visible
+  const debugInfo = document.getElementById('debug-info');
+  if (debugInfo) {
+    debugInfo.innerHTML = debugLog.join('<br>');
+  }
+  
+  // Log to console
+  console.log(logEntry);
+}
+
+// Set up debug tools
+function setupDebugTools() {
+  const debugToggleBtn = document.getElementById('debug-toggle-btn');
+  const debugClearBtn = document.getElementById('debug-clear-btn');
+  const thresholdSlider = document.getElementById('debug-speech-threshold');
+  const thresholdValue = document.getElementById('threshold-value');
+  
+  debugToggleBtn.addEventListener('click', () => {
+    debugVisible = !debugVisible;
+    document.getElementById('debug-info').style.display = debugVisible ? 'block' : 'none';
+  });
+  
+  debugClearBtn.addEventListener('click', () => {
+    debugLog = [];
+    document.getElementById('debug-info').innerHTML = '';
+  });
+  
+  thresholdSlider.addEventListener('input', (e) => {
+    const value = parseInt(e.target.value);
+    thresholdValue.textContent = value;
+    emisConfig.speechThreshold = value;
+    logDebug(`Speech threshold set to ${value}`);
+  });
+}
+
+// Set up manual input
+function setupManualInput() {
   const manualCommandBtn = document.getElementById('manual-command-btn');
   const manualCommandInput = document.getElementById('manual-command-input');
   
@@ -126,38 +209,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       manualCommandBtn.click();
     }
   });
-  
-  // Load available voices with better handling
-  loadVoices();
-  
-  // Ensure voices get loaded with a fallback
-  if (synth.onvoiceschanged !== undefined) {
-    synth.onvoiceschanged = loadVoices;
-  }
-  
-  setTimeout(() => {
-    if (!voicesLoaded) {
-      console.log('Voices still not loaded after timeout, trying again...');
-      loadVoices();
-      
-      // Show voice synthesis warning if still no voices
-      if (synth.getVoices().length === 0) {
-        handleVoiceSynthesisError({type: 'no-voices-available'});
-      }
-    }
-  }, 3000);
-  
-  // Get config from main process
+}
+
+// Load configuration
+async function loadConfig() {
   try {
-    emisConfig = await window.electronAPI.getConfig();
-    console.log('Config loaded:', emisConfig);
+    const config = await window.electronAPI.getConfig();
+    logDebug('Config loaded from main process');
+    emisConfig = { ...emisConfig, ...config };
     updateUIFromConfig();
     
     // Try to get cloud TTS voices from Google if available
     try {
       const voiceResult = await window.electronAPI.getTtsVoices();
       if (voiceResult.success && voiceResult.voices && voiceResult.voices.length > 0) {
-        console.log('Cloud TTS voices available:', voiceResult.voices.length);
+        logDebug(`Cloud TTS voices available: ${voiceResult.voices.length}`);
         
         // Add cloud voices to the dropdown with a special prefix
         voiceResult.voices.forEach(voice => {
@@ -169,51 +235,202 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
       }
     } catch (error) {
-      console.log('Cloud TTS not available:', error);
+      logDebug(`Cloud TTS not available: ${error.message}`, 'warn');
     }
+    
+    return emisConfig;
   } catch (error) {
-    console.error('Error getting config:', error);
+    logDebug(`Error getting config: ${error.message}`, 'error');
     updateStatus('Error loading config');
+    throw error;
   }
-  
-  // Initialize WebRTC audio support
-  checkAudioSupport();
-  
-  // Initialize speech recognition
-  initSpeechRecognition();
-  
-  // Initial greeting - with text fallback if speech fails
-  const greeting = emisConfig.personality?.greeting || "Hello, I'm EMIS. How can I assist you today?";
-  responseText.textContent = greeting;
-  
-  try {
-    speak(greeting);
-  } catch (error) {
-    console.error('Error with initial greeting speech:', error);
-    handleVoiceSynthesisError(error);
-  }
-});
+}
 
-// Speech recognition with Web Speech API
+// Load available speech synthesis voices
+function loadVoices() {
+  return new Promise((resolve) => {
+    logDebug('Loading speech synthesis voices...');
+    
+    // Clear existing options except the default
+    while (voiceSelect.options.length > 1) {
+      voiceSelect.options.remove(1);
+    }
+    
+    const loadVoicesHandler = () => {
+      const voices = synth.getVoices();
+      logDebug(`Found ${voices.length} browser speech synthesis voices`);
+      
+      if (voices.length > 0) {
+        // First add female English voices (preferred)
+        const femaleEnglishVoices = voices.filter(voice => 
+          (voice.name.includes('Female') || 
+           voice.name.includes('female') || 
+           voice.name.includes('-F') ||
+           voice.name.includes('f')) && 
+          voice.lang.startsWith('en')
+        );
+        
+        femaleEnglishVoices.forEach(voice => {
+          const option = document.createElement('option');
+          option.value = voice.name;
+          option.textContent = `${voice.name} (${voice.lang})`;
+          if (!voice.localService) {
+            option.textContent = '☁️ ' + option.textContent;
+          }
+          voiceSelect.appendChild(option);
+        });
+        
+        // Then add other English voices
+        const otherEnglishVoices = voices.filter(voice => 
+          voice.lang.startsWith('en') && 
+          !femaleEnglishVoices.includes(voice)
+        );
+        
+        if (otherEnglishVoices.length > 0) {
+          const separator = document.createElement('option');
+          separator.disabled = true;
+          separator.textContent = '──────────────';
+          voiceSelect.appendChild(separator);
+          
+          otherEnglishVoices.forEach(voice => {
+            const option = document.createElement('option');
+            option.value = voice.name;
+            option.textContent = `${voice.name} (${voice.lang})`;
+            if (!voice.localService) {
+              option.textContent = '☁️ ' + option.textContent;
+            }
+            voiceSelect.appendChild(option);
+          });
+        }
+        
+        // Finally add non-English voices
+        const otherVoices = voices.filter(voice => 
+          !voice.lang.startsWith('en')
+        );
+        
+        if (otherVoices.length > 0) {
+          const separator = document.createElement('option');
+          separator.disabled = true;
+          separator.textContent = '──────────────';
+          voiceSelect.appendChild(separator);
+          
+          otherVoices.forEach(voice => {
+            const option = document.createElement('option');
+            option.value = voice.name;
+            option.textContent = `${voice.name} (${voice.lang})`;
+            if (!voice.localService) {
+              option.textContent = '☁️ ' + option.textContent;
+            }
+            voiceSelect.appendChild(option);
+          });
+        }
+        
+        resolve(voices);
+      } else {
+        logDebug('No voices found, will retry', 'warn');
+        // If no voices, retry once
+        setTimeout(() => {
+          const retryVoices = synth.getVoices();
+          if (retryVoices.length > 0) {
+            logDebug(`Found ${retryVoices.length} voices on retry`);
+            resolve(retryVoices);
+          } else {
+            logDebug('Still no voices available after retry', 'error');
+            resolve([]);
+          }
+        }, 1000);
+      }
+    };
+    
+    // Different browsers load voices differently
+    if (synth.onvoiceschanged !== undefined) {
+      synth.onvoiceschanged = () => {
+        loadVoicesHandler();
+      };
+      
+      // Also call immediately in case voices are already loaded
+      loadVoicesHandler();
+      
+      // Set a timeout in case the event never fires
+      setTimeout(() => {
+        const voices = synth.getVoices();
+        if (voices.length > 0) {
+          loadVoicesHandler();
+        }
+      }, 2000);
+    } else {
+      // If no onvoiceschanged event, just try to load directly
+      loadVoicesHandler();
+    }
+  });
+}
+
+// Update UI from config
+function updateUIFromConfig() {
+  wakeWordInput.value = emisConfig.wakeWord || 'emis';
+  volumeInput.value = emisConfig.volume || 0.8;
+  
+  // Set speech threshold if available
+  const thresholdSlider = document.getElementById('debug-speech-threshold');
+  const thresholdValue = document.getElementById('threshold-value');
+  if (thresholdSlider && emisConfig.speechThreshold) {
+    thresholdSlider.value = emisConfig.speechThreshold;
+    thresholdValue.textContent = emisConfig.speechThreshold;
+  }
+  
+  // Find and select voice in dropdown
+  if (emisConfig.voice && emisConfig.voice !== 'default') {
+    for (let i = 0; i < voiceSelect.options.length; i++) {
+      if (voiceSelect.options[i].value === emisConfig.voice) {
+        voiceSelect.selectedIndex = i;
+        break;
+      }
+    }
+  }
+}
+
+// Check WebRTC audio support
+function checkAudioSupport() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    logDebug('WebRTC audio not supported in this browser', 'error');
+    audioStatusContainer.style.display = 'block';
+    document.getElementById('audio-status-message').textContent = 
+      'Audio capture not supported in this browser';
+    audioStatusContainer.style.backgroundColor = '#ffeeee';
+    audioStatusContainer.style.border = '1px solid #ffcccc';
+    document.getElementById('audio-status-message').style.color = '#cc0000';
+    return false;
+  }
+  
+  audioStatusContainer.style.display = 'block';
+  document.getElementById('audio-status-message').textContent = 
+    'Audio capture ready - click Start Listening to begin';
+  return true;
+}
+
+// Initialize browser speech recognition
 function initSpeechRecognition() {
-  // Check browser support
+  // Get SpeechRecognition constructor
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  
   if (!SpeechRecognition) {
-    console.error('Speech Recognition API not supported');
+    logDebug('SpeechRecognition API not supported in this browser', 'error');
     return false;
   }
   
   try {
-    // Create a new instance
+    // Create recognition instance
     recognition = new SpeechRecognition();
     
     // Configure recognition
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+    recognition.maxAlternatives = 3;
     
+    // Set up event handlers
     recognition.onstart = () => {
-      console.log('Speech recognition started');
+      logDebug('Browser speech recognition started');
     };
     
     recognition.onresult = (event) => {
@@ -224,64 +441,73 @@ function initSpeechRecognition() {
       
       transcriptText.textContent = transcript;
       
-      // Update UI for possible command
+      // If this is a final result, process it
       if (event.results[0].isFinal) {
+        logDebug(`Final transcript: "${transcript}"`);
         processCommand(transcript);
       }
     };
     
     recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        document.getElementById('audio-status-message').textContent = 
-          'Microphone access denied. Please check permissions.';
-      } else if (event.error === 'network') {
-        document.getElementById('audio-status-message').textContent = 
-          'Network error. Using audio sensing instead.';
+      logDebug(`Speech recognition error: ${event.error}`, 'error');
+      
+      // Error handling based on error type
+      switch (event.error) {
+        case 'network':
+          // Network error, try fallback methods
+          logDebug('Network error in speech recognition, trying fallbacks', 'warn');
+          // Don't stop listening completely - will attempt alternative methods
+          break;
+          
+        case 'not-allowed':
+        case 'service-not-allowed':
+          // Permission denied
+          audioStatusContainer.style.display = 'block';
+          document.getElementById('audio-status-message').textContent = 
+            'Microphone permission denied. Please check browser settings.';
+          audioStatusContainer.style.backgroundColor = '#ffeeee';
+          document.getElementById('audio-status-message').style.color = '#cc0000';
+          break;
+          
+        case 'aborted':
+          // Recognition was aborted - this is usually intentional
+          logDebug('Speech recognition aborted');
+          break;
+          
+        case 'no-speech':
+          // No speech detected
+          logDebug('No speech detected');
+          break;
+          
+        default:
+          // Any other error
+          logDebug(`Unhandled speech recognition error: ${event.error}`, 'error');
       }
     };
     
     recognition.onend = () => {
-      console.log('Speech recognition ended');
+      logDebug('Browser speech recognition ended');
     };
     
     return true;
   } catch (error) {
-    console.error('Error setting up speech recognition:', error);
+    logDebug(`Error initializing speech recognition: ${error.message}`, 'error');
     return false;
   }
 }
 
-// Check if WebRTC audio is supported
-function checkAudioSupport() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    console.error('WebRTC is not supported in this browser');
-    audioStatusContainer.style.display = 'block';
-    document.getElementById('audio-status-message').textContent = 
-      'Audio capture not supported in this browser';
-    audioStatusContainer.style.backgroundColor = '#ffeeee';
-    audioStatusContainer.style.border = '1px solid #ffcccc';
-    document.getElementById('audio-status-message').style.color = '#cc0000';
-    usingFallbackMode = true;
-    return false;
-  }
-  
-  // Audio seems to be supported
-  audioStatusContainer.style.display = 'block';
-  document.getElementById('audio-status-message').textContent = 
-    'Audio capture ready - click Start Listening to begin';
-  return true;
-}
-
-// Start audio capture with WebRTC
+// Start audio capture and processing
 async function startAudioCapture() {
   if (audioStream) {
-    console.log('Audio already capturing');
-    return;
+    logDebug('Audio already capturing, stopping first');
+    stopAudioCapture();
   }
   
+  logDebug('Starting audio capture...');
+  updateStatus('Starting listening...');
+  
   try {
-    // Request microphone access
+    // Request microphone access with noise reduction
     audioStream = await navigator.mediaDevices.getUserMedia({ 
       audio: {
         echoCancellation: true,
@@ -290,11 +516,11 @@ async function startAudioCapture() {
       } 
     });
     
-    // Set up audio processing
+    // Set up audio context and processing
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioContext.createMediaStreamSource(audioStream);
     
-    // Create analyser for visualization
+    // Set up analyzer for visualization
     audioAnalyser = audioContext.createAnalyser();
     audioAnalyser.fftSize = 256;
     audioData = new Uint8Array(audioAnalyser.frequencyBinCount);
@@ -303,10 +529,10 @@ async function startAudioCapture() {
     // Start visualization
     drawVisualization();
     
-    // Set up basic activity detection
-    setupActivityDetection(source);
+    // Set up voice activity detection with improved algorithm
+    setupEnhancedVoiceDetection(source);
     
-    // Update status
+    // Update UI state
     isListening = true;
     visualizer.classList.add('listening');
     startBtn.disabled = true;
@@ -316,9 +542,10 @@ async function startAudioCapture() {
     audioStatusContainer.style.display = 'block';
     document.getElementById('audio-status-message').textContent = 'Audio capture active';
     
+    logDebug('Audio capture started successfully');
     return true;
   } catch (error) {
-    console.error('Error accessing microphone:', error);
+    logDebug(`Error accessing microphone: ${error.message}`, 'error');
     
     audioStatusContainer.style.display = 'block';
     document.getElementById('audio-status-message').textContent = 
@@ -328,34 +555,60 @@ async function startAudioCapture() {
     document.getElementById('audio-status-message').style.color = '#cc0000';
     
     updateStatus('Microphone error');
-    usingFallbackMode = true;
     return false;
   }
 }
 
-// Set up activity detection for audio
-function setupActivityDetection(source) {
-  // Initialize speech recognition if available
-  const speechRecognitionAvailable = initSpeechRecognition();
-  
+// Enhanced voice detection algorithm
+function setupEnhancedVoiceDetection(source) {
   // Create script processor for audio analysis
-  // NOTE: ScriptProcessorNode is deprecated but widely supported
-  // Use AudioWorklet in production for better performance
+  // Note: ScriptProcessorNode is deprecated but has better browser support
   audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
   
   // Variables for voice activity detection
   let isSpeaking = false;
   let silenceStart = null;
   let recordingStartTime = null;
-  let silenceThreshold = 15; // Silence in milliseconds
-  let volumeThreshold = 15; // Volume level to consider as speech
   let recordedChunks = [];
   let mediaRecorder = null;
   
-  // Create MediaRecorder for capturing audio for offline processing
+  // Use dynamic threshold based on ambient noise
+  let volumeThreshold = emisConfig.speechThreshold || 15;
+  let ambientNoiseLevel = 0;
+  let sampleCount = 0;
+  let isCalibrating = true;
+  let calibrationSamples = 20; // Number of samples to use for calibration
+  
+  // Create MediaRecorder for capturing speech
   try {
+    // Try to use higher quality audio format with fallbacks
+    const mimeTypes = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+      'audio/mp4',
+      'audio/mpeg'
+    ];
+    
+    let selectedMimeType = null;
+    
+    for (const mimeType of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mimeType)) {
+        selectedMimeType = mimeType;
+        break;
+      }
+    }
+    
+    if (!selectedMimeType) {
+      throw new Error('No supported MIME type found for MediaRecorder');
+    }
+    
+    logDebug(`Using MediaRecorder with MIME type: ${selectedMimeType}`);
+    
     mediaRecorder = new MediaRecorder(audioStream, {
-      mimeType: 'audio/webm'
+      mimeType: selectedMimeType,
+      audioBitsPerSecond: 128000
     });
     
     mediaRecorder.ondataavailable = (event) => {
@@ -365,29 +618,32 @@ function setupActivityDetection(source) {
     };
     
     mediaRecorder.onstop = async () => {
-      if (recordedChunks.length === 0) return;
-      
-      const blob = new Blob(recordedChunks, { type: 'audio/webm' });
-      
-      // Try to use speech recognition if available
-      if (speechRecognitionAvailable && recognition) {
-        try {
-          recognition.start();
-        } catch (error) {
-          console.error('Could not start speech recognition:', error);
-          // Fall back to other methods
-          tryLocalSpeechToText(blob);
-        }
-      } else {
-        // Try to use WebSocket based recognition or local library
-        tryLocalSpeechToText(blob);
+      if (recordedChunks.length === 0) {
+        logDebug('No audio data recorded');
+        return;
       }
+      
+      const blob = new Blob(recordedChunks, { type: selectedMimeType });
+      logDebug(`Recorded audio blob: ${blob.size} bytes`);
+      
+      // Save the recording for debugging
+      try {
+        const result = await window.electronAPI.saveRecording(blob, `speech-${Date.now()}.webm`);
+        if (result && result.success) {
+          logDebug(`Recording saved to: ${result.path}`);
+        }
+      } catch (error) {
+        logDebug(`Error saving recording: ${error.message}`, 'error');
+      }
+      
+      // Process the audio with multiple recognition approaches
+      processAudioWithFallbacks(blob);
       
       // Reset recording buffer
       recordedChunks = [];
     };
-  } catch (error) {
-    console.error('MediaRecorder not supported:', error);
+  } catch (mediaRecorderError) {
+    logDebug(`Error creating MediaRecorder: ${mediaRecorderError.message}`, 'error');
   }
   
   // Connect the processor
@@ -404,25 +660,40 @@ function setupActivityDetection(source) {
     for (let i = 0; i < input.length; i++) {
       sum += Math.abs(input[i]);
     }
-    const volume = Math.round((sum / input.length) * 100);
+    const currentVolume = Math.round((sum / input.length) * 100);
+    
+    // Calibration phase to determine ambient noise level
+    if (isCalibrating) {
+      ambientNoiseLevel += currentVolume;
+      sampleCount++;
+      
+      if (sampleCount >= calibrationSamples) {
+        // Calculate average ambient noise and set threshold
+        ambientNoiseLevel = ambientNoiseLevel / calibrationSamples;
+        volumeThreshold = Math.max(emisConfig.speechThreshold, ambientNoiseLevel * 1.5);
+        logDebug(`Calibrated speech threshold: ${volumeThreshold} (base: ${ambientNoiseLevel})`);
+        isCalibrating = false;
+      }
+      return;
+    }
     
     // Detect speech based on volume
-    if (volume > volumeThreshold) {
+    if (currentVolume > volumeThreshold) {
       if (!isSpeaking) {
         isSpeaking = true;
         silenceStart = null;
         recordingStartTime = Date.now();
         
-        // Visual feedback that we detected speech
+        // Visual feedback
         visualizer.style.borderColor = '#6a0dad';
         
         // Start recording
         if (mediaRecorder && mediaRecorder.state === 'inactive') {
           try {
             mediaRecorder.start();
-            console.log('Started recording audio');
+            logDebug('Started recording speech');
           } catch (error) {
-            console.error('Error starting MediaRecorder:', error);
+            logDebug(`Error starting MediaRecorder: ${error.message}`, 'error');
           }
         }
       }
@@ -430,26 +701,36 @@ function setupActivityDetection(source) {
       if (isSpeaking) {
         if (silenceStart === null) {
           silenceStart = Date.now();
-        } else if (Date.now() - silenceStart > silenceThreshold * 100) {
-          // Silence long enough - end of speech
-          isSpeaking = false;
-          visualizer.style.borderColor = '';
+        } else {
+          // Calculate how long silence has lasted
+          const silenceDuration = Date.now() - silenceStart;
           
-          // Stop recording if it's been going on for at least 1 second
-          // This prevents stopping on short pauses
-          if (recordingStartTime && Date.now() - recordingStartTime > 1000) {
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-              try {
-                mediaRecorder.stop();
-                console.log('Stopped recording audio, processing speech');
-                updateStatus('Processing speech...');
-              } catch (error) {
-                console.error('Error stopping MediaRecorder:', error);
-                fallbackToManualInput();
+          // Determine silence threshold based on speech length
+          // Longer speech segments get more silence tolerance
+          const speechDuration = Date.now() - recordingStartTime;
+          const silenceThreshold = Math.min(
+            1000, // Maximum silence tolerance (1 second)
+            100 + (speechDuration / 10) // Longer speech gets more tolerance
+          );
+          
+          if (silenceDuration > silenceThreshold) {
+            // End of speech detected
+            isSpeaking = false;
+            visualizer.style.borderColor = '';
+            
+            // Stop recording if it's been going for at least 500ms
+            // This prevents stopping on short pauses
+            if (recordingStartTime && Date.now() - recordingStartTime > 500) {
+              if (mediaRecorder && mediaRecorder.state === 'recording') {
+                try {
+                  mediaRecorder.stop();
+                  logDebug('Stopped recording, processing speech');
+                  updateStatus('Processing speech...');
+                } catch (error) {
+                  logDebug(`Error stopping MediaRecorder: ${error.message}`, 'error');
+                  fallbackToManualInput();
+                }
               }
-            } else {
-              // If we couldn't record for some reason, fall back to manual input
-              fallbackToManualInput();
             }
           }
         }
@@ -458,168 +739,82 @@ function setupActivityDetection(source) {
   };
 }
 
-// Attempt local speech-to-text conversion with options
-async function tryLocalSpeechToText(audioBlob) {
-  console.log('Trying local speech-to-text options');
+// Process audio with multiple fallback methods
+async function processAudioWithFallbacks(audioBlob) {
+  logDebug('Processing audio with fallback methods');
   
-  // Option 1: Try to use Google Cloud processing first
+  // Strategy 1: Try browser's built-in SpeechRecognition
+  if (recognition) {
+    try {
+      logDebug('Attempting browser speech recognition');
+      recognition.start();
+      
+      // Set a timeout in case recognition hangs
+      setTimeout(() => {
+        if (recognition) {
+          try {
+            recognition.stop();
+          } catch (e) {
+            // Ignore errors when stopping
+          }
+        }
+      }, 5000);
+      
+      return; // Let the recognition.onresult handler process the result
+    } catch (error) {
+      logDebug(`Error starting browser speech recognition: ${error.message}`, 'error');
+      // Continue to next strategy
+    }
+  }
+  
+  // Strategy 2: Try sending to main process for Google Cloud Speech
   try {
-    console.log('Attempting to use Google Cloud Speech API...');
+    logDebug('Attempting to send audio to main process for cloud speech recognition');
+    updateStatus('Processing with cloud service...');
+    
     const result = await window.electronAPI.convertSpeechToText(audioBlob);
+    
     if (result && result.success && result.transcript) {
-      console.log('Google Cloud speech-to-text successful');
+      logDebug(`Cloud speech recognition successful: "${result.transcript}"`);
       transcriptText.textContent = result.transcript;
       processCommand(result.transcript);
       return;
-    } 
-    console.log('Google Cloud speech-to-text failed or not available, trying browser APIs');
+    } else {
+      logDebug('Cloud speech recognition failed or returned no transcript', 'warn');
+      // Continue to fallback
+    }
   } catch (error) {
-    console.error('Google Cloud speech-to-text failed:', error);
+    logDebug(`Error with cloud speech recognition: ${error.message}`, 'error');
+    // Continue to fallback
   }
   
-  // Option 2: Try to use local keyword detection as a fallback
+  // Strategy 3: Use mock recognition based on audio characteristics
   try {
-    console.log('Attempting basic keyword detection...');
-    // Create a simple list of possible commands for keyword matching
-    const keywords = [
-      { word: 'hello', command: 'hello' },
-      { word: 'hi', command: 'hello' },
-      { word: 'hey', command: 'hello' },
-      { word: 'time', command: 'what time is it' },
-      { word: 'date', command: 'what date is it' },
-      { word: 'day', command: 'what date is it' },
-      { word: 'open', command: 'open' },
-      { word: 'close', command: 'close' },
-      { word: 'weather', command: 'weather' },
-      { word: 'joke', command: 'tell me a joke' },
-      { word: 'about', command: 'tell me about yourself' },
-      { word: 'yourself', command: 'tell me about yourself' },
-      { word: 'who are you', command: 'tell me about yourself' },
-      { word: 'identity', command: 'identity' },
-      { word: 'gender', command: 'gender' },
-      { word: 'volume', command: 'volume' },
-      { word: 'up', command: 'volume up' },
-      { word: 'down', command: 'volume down' },
-      { word: 'louder', command: 'volume up' },
-      { word: 'quieter', command: 'volume down' },
-      { word: 'goodbye', command: 'goodbye' },
-      { word: 'bye', command: 'goodbye' },
-      { word: 'thanks', command: 'thank you' },
-      { word: 'thank you', command: 'thank you' },
-      { word: 'help', command: 'help' }
-    ];
-
-    // Record audio visually to show we're at least trying something
-    updateStatus('Trying keyword detection...');
+    logDebug('Attempting mock recognition based on audio length');
+    const result = await window.electronAPI.getMockTranscription();
     
-    // Use browser's native Speech Recognition API (if available)
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      console.log('Browser speech recognition available, trying to use it...');
+    if (result && result.success && result.transcript) {
+      logDebug(`Using mock transcription: "${result.transcript}"`);
       
-      try {
-        // Create a new recognition instance
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'en-US';
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        
-        // Set up a promise to handle the recognition result
-        const recognitionPromise = new Promise((resolve, reject) => {
-          // Set timeout for recognition
-          const timeoutId = setTimeout(() => {
-            recognition.abort();
-            reject(new Error('Speech recognition timeout'));
-          }, 5000);
-          
-          recognition.onresult = (event) => {
-            clearTimeout(timeoutId);
-            const transcript = event.results[0][0].transcript;
-            console.log('Browser speech recognition result:', transcript);
-            resolve(transcript);
-          };
-          
-          recognition.onerror = (event) => {
-            clearTimeout(timeoutId);
-            console.error('Browser speech recognition error:', event.error);
-            reject(new Error(event.error));
-          };
-          
-          recognition.onend = () => {
-            clearTimeout(timeoutId);
-            reject(new Error('Speech recognition ended without results'));
-          };
-        });
-        
-        // Start recognition
-        recognition.start();
-        
-        try {
-          // Wait for recognition result
-          const transcript = await recognitionPromise;
-          console.log('Browser speech recognition successful:', transcript);
-          transcriptText.textContent = transcript;
-          processCommand(transcript);
-          return;
-        } catch (recognitionError) {
-          console.error('Browser speech recognition failed:', recognitionError);
-          // Continue to next option
-        }
-      } catch (setupError) {
-        console.error('Error setting up browser speech recognition:', setupError);
-      }
+      // Show possible commands for confirmation
+      showCommandOptions([
+        result.transcript,
+        "hello",
+        "what time is it",
+        "help"
+      ]);
+      return;
     }
-    
-    // Option 3: Try manual inference from blob duration
-    try {
-      // Create audio element to check duration
-      const audioElement = new Audio();
-      audioElement.src = URL.createObjectURL(audioBlob);
-      
-      // Load audio to get duration
-      await new Promise(resolve => {
-        audioElement.onloadedmetadata = resolve;
-        audioElement.load();
-      });
-      
-      // If audio is very short (less than 1 second), it might be a simple command
-      if (audioElement.duration < 1) {
-        console.log('Short audio detected, might be a simple command');
-        // If extremely short, it might be "hey" or similar
-        if (audioElement.duration < 0.5) {
-          transcriptText.textContent = "hello";
-          processCommand("hello");
-          return;
-        }
-      }
-      
-      // If audio is medium length (1-2 seconds), it might be a simple phrase
-      if (audioElement.duration >= 1 && audioElement.duration < 2) {
-        console.log('Medium length audio detected, might be a simple phrase');
-        // Show possible commands to the user
-        const guessedCommands = [
-          "what time is it", 
-          "hello", 
-          "open [app]"
-        ];
-        
-        // Let the user pick from the list
-        showCommandOptions(guessedCommands);
-        return;
-      }
-    } catch (audioError) {
-      console.error('Error analyzing audio characteristics:', audioError);
-    }
-  } catch (keywordError) {
-    console.error('Error with keyword detection:', keywordError);
+  } catch (error) {
+    logDebug(`Mock recognition error: ${error.message}`, 'error');
   }
   
-  // Final fallback: Use manual input
-  console.log('All speech recognition methods failed, falling back to manual input');
+  // Final fallback: Manual input
+  logDebug('All speech recognition methods failed, falling back to manual input');
   fallbackToManualInput();
 }
 
-// Add this new function to renderer.js to help with command selection
+// Show command options for selection
 function showCommandOptions(commands) {
   updateStatus('Please select what you said:');
   
@@ -693,7 +888,7 @@ function showCommandOptions(commands) {
 
 // Fall back to manual text input
 function fallbackToManualInput() {
-  console.log('Falling back to manual input');
+  logDebug('Falling back to manual input');
   updateStatus('Please type your command');
   
   // Show the manual input with prompt
@@ -778,6 +973,8 @@ function drawVisualization() {
 // Stop audio capture
 function stopAudioCapture() {
   if (audioStream) {
+    logDebug('Stopping audio capture');
+    
     // Stop all tracks
     audioStream.getTracks().forEach(track => track.stop());
     audioStream = null;
@@ -793,7 +990,6 @@ function stopAudioCapture() {
     }
     
     if (audioContext && audioContext.state !== 'closed') {
-      // Don't close the context, just suspend it
       audioContext.suspend();
     }
     
@@ -801,6 +997,15 @@ function stopAudioCapture() {
     if (animationFrame) {
       cancelAnimationFrame(animationFrame);
       animationFrame = null;
+    }
+    
+    // Try to stop speech recognition if active
+    if (recognition) {
+      try {
+        recognition.abort();
+      } catch (error) {
+        // Ignore errors when stopping
+      }
     }
     
     // Update status
@@ -811,8 +1016,9 @@ function stopAudioCapture() {
     updateStatus('Idle');
     
     audioStatusContainer.style.display = 'block';
-    document.getElementById('audio-status-message').textContent = 
-      'Audio capture stopped';
+    document.getElementById('audio-status-message').textContent = 'Audio capture stopped';
+    
+    logDebug('Audio capture successfully stopped');
   }
 }
 
@@ -821,15 +1027,17 @@ async function processCommand(command) {
   if (!command) return;
   
   const cleanCommand = command.toLowerCase().trim();
-  console.log('Processing command:', cleanCommand);
+  logDebug(`Processing command: "${cleanCommand}"`);
   
   // Skip wake word check for manual input
   const skipWakeWordCheck = !isListening;
   
+  // Check for wake word if needed
   if (isListening && 
+      !skipWakeWordCheck && 
       !cleanCommand.startsWith(emisConfig.wakeWord.toLowerCase()) && 
       statusElement.textContent !== 'Processing...') {
-    console.log('Wake word not detected, ignoring command');
+    logDebug('Wake word not detected, ignoring command');
     return;
   }
   
@@ -839,6 +1047,7 @@ async function processCommand(command) {
     : cleanCommand;
   
   if (!commandWithoutWake) {
+    logDebug('Empty command after removing wake word');
     return;
   }
   
@@ -848,49 +1057,60 @@ async function processCommand(command) {
   
   try {
     // Send command to main process
-    console.log('Sending command to main process:', commandWithoutWake);
+    logDebug(`Sending command to main process: "${commandWithoutWake}"`);
     const result = await window.electronAPI.executeCommand(commandWithoutWake);
     
     visualizer.classList.remove('processing');
     
     if (result.success) {
       updateStatus('Command executed');
+      logDebug(`Command successful: "${result.response}"`);
       
-      // Always update text response
+      // Update response
       responseText.textContent = result.response;
       
-      // Try to speak, but continue regardless of success
+      // Speak the response
       try {
         await speakWithPromise(result.response);
       } catch (error) {
-        console.error('Speech error, continuing with text only:', error);
+        logDebug(`Speech error: ${error.message}`, 'error');
       }
     } else {
       updateStatus('Command failed');
+      logDebug(`Command failed: "${result.response || 'No response'}"`, 'warn');
       
-      // Always update text response
+      // Update response
       responseText.textContent = result.response || "I couldn't process that command.";
       
-      // Try to speak, but continue regardless of success
+      // Speak the response
       try {
         await speakWithPromise(result.response || "I couldn't process that command.");
       } catch (error) {
-        console.error('Speech error, continuing with text only:', error);
+        logDebug(`Speech error: ${error.message}`, 'error');
       }
     }
+    
+    // Resume listening if appropriate
+    if (isListening) {
+      visualizer.classList.add('listening');
+    }
   } catch (error) {
-    console.error('Error executing command:', error);
+    logDebug(`Error executing command: ${error.message}`, 'error');
     updateStatus('Error');
     visualizer.classList.remove('processing');
     
     const errorMessage = "I'm sorry, I encountered an error while processing your request.";
     responseText.textContent = errorMessage;
     
-    // Try to speak, but continue regardless of success
     try {
       await speakWithPromise(errorMessage);
-    } catch (error) {
-      console.error('Speech error, continuing with text only:', error);
+    } catch (speechError) {
+      logDebug(`Speech error: ${speechError.message}`, 'error');
+    }
+    
+    // Resume listening if appropriate
+    if (isListening) {
+      visualizer.classList.add('listening');
     }
   }
 }
@@ -907,142 +1127,203 @@ function speakWithPromise(text) {
       // Cancel any ongoing speech
       synth.cancel();
       
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.volume = emisConfig.volume;
-      
-      // Enhanced voice selection logic
-      const voices = synth.getVoices();
-      let voiceFound = false;
-      
-      // First try the specified voice
-      if (emisConfig.voice !== 'default') {
-        // Check if this is a cloud voice (starts with 'en-US' or similar pattern)
-        if (emisConfig.voice.match(/^[a-z]{2}-[A-Z]{2}/)) {
-          // This is likely a cloud voice, try Google Cloud TTS
-          window.electronAPI.synthesizeSpeech(text)
-            .then(result => {
-              if (result.success) {
-                // Cloud TTS successful, resolve the promise
-                console.log('Used cloud TTS successfully');
-                visualizer.classList.remove('speaking');
-                if (isListening) visualizer.classList.add('listening');
-                resolve();
-              } else {
-                // Fall back to browser TTS
-                console.log('Cloud TTS failed, falling back to browser TTS');
-                continueWithBrowserTTS();
-              }
-            })
-            .catch(error => {
-              console.error('Cloud TTS error, falling back to browser TTS:', error);
-              continueWithBrowserTTS();
-            });
-          
-          // Add speaking visual indication
-          visualizer.classList.add('speaking');
-          visualizer.classList.remove('listening');
-          
-          // Don't continue with browser TTS yet, wait for cloud TTS result
-          return;
-        } else {
-          // Try to find the specified voice in browser voices
-          const selectedVoice = voices.find(voice => voice.name === emisConfig.voice);
-          if (selectedVoice) {
-            utterance.voice = selectedVoice;
-            voiceFound = true;
-          }
-        }
+      // Try to use Google Cloud TTS first if it's a cloud voice
+      if (emisConfig.voice && emisConfig.voice.match(/^[a-z]{2}-[A-Z]{2}/)) {
+        // This looks like a cloud voice ID (e.g., en-US-Neural2-F)
+        window.electronAPI.synthesizeSpeech(text)
+          .then(result => {
+            if (result.success) {
+              // Cloud TTS successful
+              logDebug('Used cloud TTS successfully');
+              visualizer.classList.remove('speaking');
+              if (isListening) visualizer.classList.add('listening');
+              resolve();
+            } else {
+              // Fall back to browser TTS
+              logDebug(`Cloud TTS failed: ${result.error || 'Unknown error'}`, 'warn');
+              continueBrowserTTS();
+            }
+          })
+          .catch(error => {
+            logDebug(`Cloud TTS error: ${error.message}`, 'error');
+            continueBrowserTTS();
+          });
+        
+        // Add speaking visual indication
+        visualizer.classList.add('speaking');
+        visualizer.classList.remove('listening');
+        
+        return;
+      } else {
+        continueBrowserTTS();
       }
       
-      // Continue with browser TTS
-      continueWithBrowserTTS();
-      
-      function continueWithBrowserTTS() {
-        // If specified voice not found, try to find a voice matching the fallback criteria
-        if (!voiceFound && emisConfig.fallbackVoice) {
-          const fallbackVoice = voices.find(voice => 
-            (voice.name.includes('Female') || 
-             voice.name.includes('female') || 
-             voice.name.includes('-F')) && 
-            voice.lang.startsWith('en') &&
-            !voice.localService // Prefer cloud/neural voices
-          );
-          
-          if (fallbackVoice) {
-            utterance.voice = fallbackVoice;
-            voiceFound = true;
-            console.log('Using fallback voice:', fallbackVoice.name);
-          }
-        }
+      function continueBrowserTTS() {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.volume = emisConfig.volume;
         
-        // If still no voice found, use the first available female English voice
-        if (!voiceFound) {
-          const anyFemaleVoice = voices.find(voice => 
-            (voice.name.includes('Female') || 
-             voice.name.includes('female') || 
-             voice.name.includes('-F') ||
-             voice.name.includes('f')) && 
-            voice.lang.startsWith('en')
-          );
-          
-          if (anyFemaleVoice) {
-            utterance.voice = anyFemaleVoice;
-            console.log('Using backup female voice:', anyFemaleVoice.name);
-          } else if (voices.length > 0) {
-            // Last resort: use any English voice
-            const anyEnglishVoice = voices.find(voice => voice.lang.startsWith('en'));
-            if (anyEnglishVoice) {
-              utterance.voice = anyEnglishVoice;
-              console.log('Using any English voice:', anyEnglishVoice.name);
-            } else {
-              // Very last resort: use the first available voice
-              utterance.voice = voices[0];
-              console.log('Using first available voice:', voices[0].name);
-            }
-          }
-        }
+        // Select voice
+        selectVoice(utterance);
         
+        // Set up event handlers
         utterance.onstart = () => {
-          console.log('Speech started');
+          logDebug('Speech started');
           visualizer.classList.add('speaking');
           visualizer.classList.remove('listening');
         };
         
         utterance.onend = () => {
-          console.log('Speech ended');
+          logDebug('Speech ended');
           visualizer.classList.remove('speaking');
           if (isListening) visualizer.classList.add('listening');
           resolve();
         };
         
         utterance.onerror = (event) => {
-          console.error('Speech synthesis error:', event);
-          handleVoiceSynthesisError(event);
+          logDebug(`Speech synthesis error: ${event.error}`, 'error');
           visualizer.classList.remove('speaking');
           if (isListening) visualizer.classList.add('listening');
-          // Still resolve since we want to continue execution
-          resolve();
+          resolve(); // Still resolve to continue execution
         };
         
+        // Speak
         synth.speak(utterance);
         
-        // Safety fallback - resolve after max speech time if speech fails to trigger onend
+        // Safety fallback after max time
         setTimeout(() => {
           if (synth.speaking) {
-            console.warn('Speech did not complete in expected time, forcing continue');
+            logDebug('Speech taking too long, forcing continue', 'warn');
             resolve();
           }
-        }, 10000); // 10 second max speech time
+        }, 10000);
       }
     } catch (error) {
-      console.error('Error with speech synthesis:', error);
-      handleVoiceSynthesisError(error);
+      logDebug(`Error with speech synthesis: ${error.message}`, 'error');
       resolve(); // Still resolve to continue execution
     }
   });
 }
 
-// Legacy speak function for backward compatibility
+// Helper function to select the best voice
+function selectVoice(utterance) {
+  const voices = synth.getVoices();
+  let voiceFound = false;
+  
+  // Try to use the configured voice
+  if (emisConfig.voice !== 'default') {
+    const selectedVoice = voices.find(voice => voice.name === emisConfig.voice);
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+      voiceFound = true;
+      logDebug(`Using configured voice: ${selectedVoice.name}`);
+    }
+  }
+  
+  if (!voiceFound) {
+    // Try to find a female English voice
+    const femaleVoice = voices.find(voice => 
+      (voice.name.includes('Female') || 
+       voice.name.includes('female') || 
+       voice.name.includes('-F')) && 
+      voice.lang.startsWith('en')
+    );
+    
+    if (femaleVoice) {
+      utterance.voice = femaleVoice;
+      voiceFound = true;
+      logDebug(`Using female voice: ${femaleVoice.name}`);
+    } else {
+      // Any English voice
+      const englishVoice = voices.find(voice => voice.lang.startsWith('en'));
+      if (englishVoice) {
+        utterance.voice = englishVoice;
+        voiceFound = true;
+        logDebug(`Using English voice: ${englishVoice.name}`);
+      } else if (voices.length > 0) {
+        // Any voice
+        utterance.voice = voices[0];
+        logDebug(`Using fallback voice: ${voices[0].name}`);
+      }
+    }
+  }
+}
+
+// Update status display
+function updateStatus(status) {
+  statusElement.textContent = status;
+  logDebug(`Status updated: ${status}`);
+}
+
+// Setup event listeners
+document.addEventListener('DOMContentLoaded', () => {
+  // Start/stop listening
+  startBtn.addEventListener('click', () => {
+    logDebug('Start button clicked');
+    startAudioCapture();
+  });
+  
+  stopBtn.addEventListener('click', () => {
+    logDebug('Stop button clicked');
+    stopAudioCapture();
+  });
+  
+  // Settings panel
+  settingsBtn.addEventListener('click', () => {
+    settingsPanel.classList.toggle('active');
+  });
+  
+  saveSettingsBtn.addEventListener('click', async () => {
+    // Update config
+    const newConfig = {
+      wakeWord: wakeWordInput.value,
+      voice: voiceSelect.value,
+      volume: parseFloat(volumeInput.value),
+      speechThreshold: parseInt(document.getElementById('debug-speech-threshold').value)
+    };
+    
+    try {
+      // Save to main process
+      logDebug(`Saving new config: ${JSON.stringify(newConfig)}`);
+      emisConfig = await window.electronAPI.updateConfig(newConfig);
+      updateStatus('Settings saved');
+      
+      // Confirm with voice
+      speak('Settings updated successfully.');
+      
+      // Close panel
+      settingsPanel.classList.remove('active');
+    } catch (error) {
+      logDebug(`Error saving settings: ${error.message}`, 'error');
+      updateStatus('Error saving settings');
+    }
+  });
+  
+  // Visibility changes
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && isListening) {
+      logDebug('Document hidden, stopping audio capture');
+      stopAudioCapture();
+    }
+  });
+  
+  // Window closing
+  window.addEventListener('beforeunload', () => {
+    if (isListening) {
+      stopAudioCapture();
+    }
+    
+    if (synth) {
+      synth.cancel();
+    }
+  });
+  
+  // Error logging
+  window.addEventListener('error', (event) => {
+    logDebug(`Uncaught error: ${event.error}`, 'error');
+  });
+});
+
+// Legacy speak function for compatibility
 function speak(text, callback) {
   if (!text) {
     if (callback) callback();
@@ -1050,285 +1331,16 @@ function speak(text, callback) {
   }
   
   responseText.textContent = text;
-  console.log('EMIS response:', text);
+  logDebug(`EMIS response: ${text}`);
   
-  try {
-    // Cancel any ongoing speech
-    synth.cancel();
-    
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.volume = emisConfig.volume;
-    
-    // Enhanced voice selection logic
-    const voices = synth.getVoices();
-    let voiceFound = false;
-    
-    // First try the specified voice
-    if (emisConfig.voice !== 'default') {
-      // Check if this is a cloud voice (starts with 'en-US' or similar pattern)
-      if (emisConfig.voice.match(/^[a-z]{2}-[A-Z]{2}/)) {
-        // This is likely a cloud voice, try Google Cloud TTS
-        window.electronAPI.synthesizeSpeech(text)
-          .then(result => {
-            if (result.success) {
-              // Cloud TTS successful
-              console.log('Used cloud TTS successfully');
-              if (callback) callback();
-            } else {
-              // Fall back to browser TTS
-              console.log('Cloud TTS failed, falling back to browser TTS');
-              continueBrowserTTS();
-            }
-          })
-          .catch(error => {
-            console.error('Cloud TTS error, falling back to browser TTS:', error);
-            continueBrowserTTS();
-          });
-        
-        return;
-      } else {
-        // Try to find the specified voice in browser voices
-        const selectedVoice = voices.find(voice => voice.name === emisConfig.voice);
-        if (selectedVoice) {
-          utterance.voice = selectedVoice;
-          voiceFound = true;
-        }
-      }
-    }
-    
-    continueBrowserTTS();
-    
-    function continueBrowserTTS() {
-      // If specified voice not found, try to find a voice matching the fallback criteria
-      if (!voiceFound && emisConfig.fallbackVoice) {
-        const fallbackVoice = voices.find(voice => 
-          (voice.name.includes('Female') || 
-           voice.name.includes('female') || 
-           voice.name.includes('-F')) && 
-          voice.lang.startsWith('en') &&
-          !voice.localService // Prefer cloud/neural voices
-        );
-        
-        if (fallbackVoice) {
-          utterance.voice = fallbackVoice;
-          voiceFound = true;
-          console.log('Using fallback voice:', fallbackVoice.name);
-        }
-      }
-      
-      // If still no voice found, use the first available female English voice
-      if (!voiceFound) {
-        const anyFemaleVoice = voices.find(voice => 
-          (voice.name.includes('Female') || 
-           voice.name.includes('female') || 
-           voice.name.includes('-F') ||
-           voice.name.includes('f')) && 
-          voice.lang.startsWith('en')
-        );
-        
-        if (anyFemaleVoice) {
-          utterance.voice = anyFemaleVoice;
-          console.log('Using backup female voice:', anyFemaleVoice.name);
-        } else if (voices.length > 0) {
-          // Last resort: use any English voice
-          const anyEnglishVoice = voices.find(voice => voice.lang.startsWith('en'));
-          if (anyEnglishVoice) {
-            utterance.voice = anyEnglishVoice;
-            console.log('Using any English voice:', anyEnglishVoice.name);
-          } else {
-            // Very last resort: use the first available voice
-            utterance.voice = voices[0];
-            console.log('Using first available voice:', voices[0].name);
-          }
-        }
-      }
-      
-      utterance.onstart = () => {
-        console.log('Speech started');
-        visualizer.classList.add('speaking');
-        visualizer.classList.remove('listening');
-      };
-      
-      utterance.onend = () => {
-        console.log('Speech ended');
-        visualizer.classList.remove('speaking');
-        if (isListening) visualizer.classList.add('listening');
-        
-        if (callback) callback();
-      };
-      
-      utterance.onerror = (event) => {
-        console.error('Speech synthesis error:', event);
-        handleVoiceSynthesisError(event);
-        visualizer.classList.remove('speaking');
-        if (isListening) visualizer.classList.add('listening');
-        
-        if (callback) callback();
-      };
-      
-      synth.speak(utterance);
-      
-      // Safety fallback
-      setTimeout(() => {
-        if (synth.speaking && callback) {
-          console.warn('Speech taking too long, calling callback anyway');
-          callback();
-        }
-      }, 10000);
-    }
-  } catch (error) {
-    console.error('Error with speech synthesis:', error);
-    handleVoiceSynthesisError(error);
-    if (callback) callback();
-  }
-}
-
-// Handle voice synthesis errors
-function handleVoiceSynthesisError(error) {
-  voiceSynthesisErrorCount++;
-  
-  if (voiceSynthesisErrorCount === 1) {
-    // First error - show the warning
-    voiceSynthesisErrorContainer.style.display = 'block';
-  }
-  
-  // Retry loading voices
-  if (voiceSynthesisErrorCount <= 2) {
-    setTimeout(() => {
-      loadVoices();
-    }, 2000);
-  }
-}
-
-// Update status display
-function updateStatus(status) {
-  statusElement.textContent = status;
-  console.log('Status updated:', status);
-}
-
-// Load available voices
-function loadVoices() {
-  console.log('Loading voices...');
-  
-  // Clear existing options except the first default option
-  while (voiceSelect.options.length > 1) {
-    voiceSelect.options.remove(1);
-  }
-  
-  // Get and add browser voices
-  const voices = synth.getVoices();
-  console.log('Available browser voices:', voices.length);
-  
-  // Store voices for later use
-  availableVoices = voices;
-  
-  if (voices.length > 0) {
-    addVoicesToSelect(voices);
-    voicesLoaded = true;
-  } else {
-    // Add at least one dummy option
-    const option = document.createElement('option');
-    option.value = "default";
-    option.textContent = "Default Voice";
-    voiceSelect.appendChild(option);
-    
-    // Try again in a second (browsers sometimes load voices asynchronously)
-    setTimeout(() => {
-      const voices = synth.getVoices();
-      if (voices.length > 0 && !voicesLoaded) {
-        console.log('Voices loaded on retry:', voices.length);
-        addVoicesToSelect(voices);
-        voicesLoaded = true;
-      }
-    }, 1000);
-  }
-}
-
-// Helper function to add voices to select element
-function addVoicesToSelect(voices) {
-  // First add female English voices (preferred)
-  const femaleEnglishVoices = voices.filter(voice => 
-    (voice.name.includes('Female') || 
-     voice.name.includes('female') || 
-     voice.name.includes('-F') ||
-     voice.name.includes('f')) && 
-    voice.lang.startsWith('en')
-  );
-  
-  femaleEnglishVoices.forEach(voice => {
-    const option = document.createElement('option');
-    option.value = voice.name;
-    option.textContent = `${voice.name} (${voice.lang})`;
-    if (!voice.localService) {
-      option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
-    }
-    voiceSelect.appendChild(option);
-  });
-  
-  // Then add other English voices
-  const otherEnglishVoices = voices.filter(voice => 
-    voice.lang.startsWith('en') && 
-    !femaleEnglishVoices.includes(voice)
-  );
-  
-  if (otherEnglishVoices.length > 0) {
-    // Add a separator
-    const separator = document.createElement('option');
-    separator.disabled = true;
-    separator.textContent = '──────────────';
-    voiceSelect.appendChild(separator);
-    
-    // Add the other English voices
-    otherEnglishVoices.forEach(voice => {
-      const option = document.createElement('option');
-      option.value = voice.name;
-      option.textContent = `${voice.name} (${voice.lang})`;
-      if (!voice.localService) {
-        option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
-      }
-      voiceSelect.appendChild(option);
+  speakWithPromise(text)
+    .then(() => {
+      if (callback) callback();
+    })
+    .catch(error => {
+      logDebug(`Speech error: ${error.message}`, 'error');
+      if (callback) callback();
     });
-  }
-  
-  // Finally add all other voices if any
-  const otherVoices = voices.filter(voice => 
-    !voice.lang.startsWith('en')
-  );
-  
-  if (otherVoices.length > 0) {
-    // Add a separator
-    const separator = document.createElement('option');
-    separator.disabled = true;
-    separator.textContent = '──────────────';
-    voiceSelect.appendChild(separator);
-    
-    // Add the other voices
-    otherVoices.forEach(voice => {
-      const option = document.createElement('option');
-      option.value = voice.name;
-      option.textContent = `${voice.name} (${voice.lang})`;
-      if (!voice.localService) {
-        option.textContent = '☁️ ' + option.textContent; // Mark cloud voices
-      }
-      voiceSelect.appendChild(option);
-    });
-  }
-}
-
-// Update UI from config
-function updateUIFromConfig() {
-  wakeWordInput.value = emisConfig.wakeWord || 'emis';
-  volumeInput.value = emisConfig.volume || 0.8;
-  
-  if (emisConfig.voice && emisConfig.voice !== 'default') {
-    // Find and select the voice in dropdown
-    for (let i = 0; i < voiceSelect.options.length; i++) {
-      if (voiceSelect.options[i].value === emisConfig.voice) {
-        voiceSelect.selectedIndex = i;
-        break;
-      }
-    }
-  }
 }
 
 // Add CSS for processing animation
@@ -1345,68 +1357,3 @@ styleElement.textContent = `
   }
 `;
 document.head.appendChild(styleElement);
-
-// Event listeners
-startBtn.addEventListener('click', () => {
-  console.log('Start button clicked');
-  startAudioCapture();
-});
-
-stopBtn.addEventListener('click', () => {
-  console.log('Stop button clicked');
-  stopAudioCapture();
-});
-
-settingsBtn.addEventListener('click', () => {
-  settingsPanel.classList.toggle('active');
-});
-
-saveSettingsBtn.addEventListener('click', async () => {
-  // Update config
-  const newConfig = {
-    wakeWord: wakeWordInput.value,
-    voice: voiceSelect.value,
-    volume: parseFloat(volumeInput.value)
-  };
-  
-  try {
-    // Save to main process
-    emisConfig = await window.electronAPI.updateConfig(newConfig);
-    updateStatus('Settings saved');
-    
-    // Confirm with voice
-    speak('Settings updated successfully.');
-    
-    // Close panel
-    settingsPanel.classList.remove('active');
-  } catch (error) {
-    console.error('Error saving settings:', error);
-    updateStatus('Error saving settings');
-  }
-});
-
-// Handle visibility changes
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    // Stop listening if page is hidden
-    if (isListening) {
-      stopAudioCapture();
-    }
-  }
-});
-
-// When browser window is closing
-window.addEventListener('beforeunload', () => {
-  if (isListening) {
-    stopAudioCapture();
-  }
-  
-  if (synth) {
-    synth.cancel();
-  }
-});
-
-// Log any uncaught errors
-window.addEventListener('error', (event) => {
-  console.error('Uncaught error:', event.error);
-});

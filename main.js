@@ -99,8 +99,8 @@ class TTSService {
   }
 }
 
-// Add the Speech Service class
-class SpeechService {
+// Speech Recognition Service class to handle audio processing and recognition
+class SpeechRecognitionService {
   constructor(credentialsPath) {
     try {
       // Check if the required module is installed
@@ -112,31 +112,45 @@ class SpeechService {
       });
       
       // Create cache directory if it doesn't exist
-      this.cacheDir = path.join(__dirname, 'audio-cache');
+      this.cacheDir = path.join(__dirname, 'speech-cache');
       if (!fs.existsSync(this.cacheDir)) {
         fs.mkdirSync(this.cacheDir, { recursive: true });
       }
       
-      console.log('Speech Service initialized successfully');
+      console.log('Speech Recognition Service initialized successfully');
       this.initialized = true;
     } catch (error) {
-      console.error('Error initializing Speech service:', error);
+      console.error('Error initializing Speech Recognition service:', error);
       this.initialized = false;
     }
   }
 
   // Convert speech audio to text
-  async recognizeSpeech(audioBuffer) {
+  async recognizeSpeech(audioBuffer, options = {}) {
     if (!this.initialized) {
-      throw new Error('Speech service not initialized');
+      throw new Error('Speech recognition service not initialized');
     }
+    
+    // Default options
+    const defaultOptions = {
+      encoding: 'WEBM_OPUS',
+      sampleRateHertz: 48000,
+      languageCode: 'en-US',
+      model: 'default',
+      enableAutomaticPunctuation: true,
+      enableWordTimeOffsets: false,
+      maxAlternatives: 3
+    };
+    
+    const requestOptions = { ...defaultOptions, ...options };
     
     try {
       // Create a unique filename for the audio
       const tempFile = path.join(this.cacheDir, `speech-${Date.now()}.webm`);
       
-      // Save the buffer as a file
+      // Save the buffer as a file for processing
       await fs.promises.writeFile(tempFile, audioBuffer);
+      console.log(`Audio saved to temp file: ${tempFile}`);
       
       // Read the file and convert to base64
       const audioBytes = fs.readFileSync(tempFile).toString('base64');
@@ -145,37 +159,89 @@ class SpeechService {
       const audio = {
         content: audioBytes,
       };
+      
       const config = {
-        encoding: 'WEBM_OPUS',
-        sampleRateHertz: 48000,
-        languageCode: 'en-US',
-        model: 'default',
-        enableAutomaticPunctuation: true,
-        enableWordTimeOffsets: false,
+        encoding: requestOptions.encoding,
+        sampleRateHertz: requestOptions.sampleRateHertz,
+        languageCode: requestOptions.languageCode,
+        model: requestOptions.model,
+        enableAutomaticPunctuation: requestOptions.enableAutomaticPunctuation,
+        enableWordTimeOffsets: requestOptions.enableWordTimeOffsets,
+        maxAlternatives: requestOptions.maxAlternatives
       };
+      
       const request = {
         audio: audio,
         config: config,
       };
       
       // Perform the recognition
+      console.log('Sending request to Google Cloud Speech API...');
       const [response] = await this.client.recognize(request);
       
-      // Combine all transcriptions
-      const transcription = response.results
-        .map(result => result.alternatives[0].transcript)
-        .join('\n');
-      
-      console.log(`Speech recognized: ${transcription}`);
-      
-      // Clean up the temp file
-      fs.unlinkSync(tempFile);
-      
-      return transcription;
+      // Process response
+      if (response.results && response.results.length > 0) {
+        // Combine all transcriptions
+        const transcription = response.results
+          .map(result => result.alternatives[0].transcript)
+          .join(' ');
+        
+        // Get confidence from first result
+        const confidence = response.results[0].alternatives[0].confidence;
+        
+        console.log(`Speech recognized: "${transcription}" (confidence: ${confidence})`);
+        
+        // Clean up the temp file
+        try {
+          fs.unlinkSync(tempFile);
+        } catch (cleanupError) {
+          console.warn(`Error removing temp file: ${cleanupError.message}`);
+        }
+        
+        return {
+          success: true,
+          transcript: transcription,
+          confidence: confidence,
+          source: 'google-cloud'
+        };
+      } else {
+        console.log('No transcription results returned from Google Cloud');
+        
+        // Clean up the temp file
+        try {
+          fs.unlinkSync(tempFile);
+        } catch (cleanupError) {
+          console.warn(`Error removing temp file: ${cleanupError.message}`);
+        }
+        
+        return {
+          success: false,
+          error: 'No transcription results returned',
+          fallback: true
+        };
+      }
     } catch (error) {
       console.error('Error recognizing speech:', error);
       throw error;
     }
+  }
+
+  // Get mock transcript when recognition fails
+  getMockTranscription() {
+    const mockPhrases = [
+      "open spotify",
+      "what time is it",
+      "hello",
+      "who are you",
+      "volume up",
+      "volume down",
+      "tell me about yourself",
+      "tell me a joke",
+      "thank you",
+      "goodbye"
+    ];
+    
+    return mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
   }
 }
 
@@ -193,13 +259,13 @@ try {
   console.error('Error initializing TTS service:', error);
 }
 
-// Initialize speech service
+// Initialize speech recognition service
 let speechService = null;
 try {
   const credentialsPath = path.join(__dirname, 'google-credentials.json');
   if (fs.existsSync(credentialsPath)) {
-    speechService = new SpeechService(credentialsPath);
-    console.log('Speech service initialized with credentials');
+    speechService = new SpeechRecognitionService(credentialsPath);
+    console.log('Speech recognition service initialized with credentials');
   } else {
     console.log('Google credentials file not found, Speech service not initialized');
   }
@@ -218,6 +284,7 @@ let emisConfig = {
   },
   wakeWord: 'emis',
   volume: 0.8,
+  speechThreshold: 15, // Default threshold for speech detection
   personality: {
     greeting: "Hello, I'm EMIS. How can I assist you today?",
     farewell: "Goodbye. I'll be here if you need me.",
@@ -451,16 +518,12 @@ ipcMain.handle('synthesize-speech', async (event, text) => {
 
 // Speech-to-text IPC handler
 ipcMain.handle('convert-speech-to-text', async (event, audioBuffer) => {
-  console.log('Received speech-to-text request');
+  console.log('Received speech-to-text request, buffer size:', audioBuffer.length);
   
-  // If Google Cloud Speech service is available
   if (speechService && speechService.initialized) {
     try {
-      const transcript = await speechService.recognizeSpeech(audioBuffer);
-      return { 
-        success: true, 
-        transcript: transcript 
-      };
+      const result = await speechService.recognizeSpeech(audioBuffer);
+      return result;
     } catch (error) {
       console.error('Speech-to-text error:', error);
       return { 
@@ -470,10 +533,8 @@ ipcMain.handle('convert-speech-to-text', async (event, audioBuffer) => {
       };
     }
   } else {
-    // Try to use a local fallback method if available
-    console.log('Speech service not available, checking for fallbacks');
-    
-    // Add any local fallback methods here
+    // If Google service not available, try to use fallback methods
+    console.log('Speech service not available, using fallback methods');
     
     return { 
       success: false, 
@@ -481,6 +542,30 @@ ipcMain.handle('convert-speech-to-text', async (event, audioBuffer) => {
       fallback: true
     };
   }
+});
+
+// Mock transcription for testing
+ipcMain.handle('get-mock-transcription', async () => {
+  const mockPhrases = [
+    "open spotify",
+    "what time is it",
+    "hello",
+    "who are you",
+    "volume up",
+    "volume down",
+    "tell me about yourself",
+    "tell me a joke",
+    "thank you",
+    "goodbye"
+  ];
+  
+  const randomPhrase = mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
+  
+  return { 
+    success: true, 
+    transcript: randomPhrase,
+    isFinal: true
+  };
 });
 
 // Handle command execution
@@ -629,27 +714,6 @@ ipcMain.handle('stop-listening', async () => {
   return { 
     success: true, 
     message: "Stopped listening" 
-  };
-});
-
-// Mock transcription for testing when Web Speech API fails
-ipcMain.handle('get-mock-transcription', async () => {
-  // This is just for testing, would be replaced with actual speech recognition
-  const mockPhrases = [
-    "open spotify",
-    "what time is it",
-    "hello",
-    "who are you",
-    "volume up",
-    "volume down"
-  ];
-  
-  const randomPhrase = mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
-  
-  return { 
-    success: true, 
-    transcript: randomPhrase,
-    isFinal: true
   };
 });
 
