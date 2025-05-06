@@ -14,7 +14,7 @@ class TTSService {
       const textToSpeech = require('@google-cloud/text-to-speech');
       
       // Initialize with Google Cloud credentials
-      this.client = new textToSpeech.TextToSpeechClient({
+      this.client = new textToSpeechClient({
         keyFilename: credentialsPath
       });
       
@@ -94,6 +94,86 @@ class TTSService {
   }
 }
 
+// Add the Speech Service class
+class SpeechService {
+  constructor(credentialsPath) {
+    try {
+      // Check if the required module is installed
+      const speech = require('@google-cloud/speech');
+      
+      // Initialize with Google Cloud credentials
+      this.client = new speech.SpeechClient({
+        keyFilename: credentialsPath
+      });
+      
+      // Create cache directory if it doesn't exist
+      this.cacheDir = path.join(__dirname, 'audio-cache');
+      if (!fs.existsSync(this.cacheDir)) {
+        fs.mkdirSync(this.cacheDir, { recursive: true });
+      }
+      
+      console.log('Speech Service initialized successfully');
+      this.initialized = true;
+    } catch (error) {
+      console.error('Error initializing Speech service:', error);
+      this.initialized = false;
+    }
+  }
+
+  // Convert speech audio to text
+  async recognizeSpeech(audioBuffer) {
+    if (!this.initialized) {
+      throw new Error('Speech service not initialized');
+    }
+    
+    try {
+      // Create a unique filename for the audio
+      const tempFile = path.join(this.cacheDir, `speech-${Date.now()}.webm`);
+      
+      // Save the buffer as a file
+      await fs.promises.writeFile(tempFile, audioBuffer);
+      
+      // Read the file and convert to base64
+      const audioBytes = fs.readFileSync(tempFile).toString('base64');
+      
+      // Configure the request
+      const audio = {
+        content: audioBytes,
+      };
+      const config = {
+        encoding: 'WEBM_OPUS',
+        sampleRateHertz: 48000,
+        languageCode: 'en-US',
+        model: 'default',
+        enableAutomaticPunctuation: true,
+        enableWordTimeOffsets: false,
+      };
+      const request = {
+        audio: audio,
+        config: config,
+      };
+      
+      // Perform the recognition
+      const [response] = await this.client.recognize(request);
+      
+      // Combine all transcriptions
+      const transcription = response.results
+        .map(result => result.alternatives[0].transcript)
+        .join('\n');
+      
+      console.log(`Speech recognized: ${transcription}`);
+      
+      // Clean up the temp file
+      fs.unlinkSync(tempFile);
+      
+      return transcription;
+    } catch (error) {
+      console.error('Error recognizing speech:', error);
+      throw error;
+    }
+  }
+}
+
 // Initialize TTS service
 let ttsService = null;
 try {
@@ -106,6 +186,20 @@ try {
   }
 } catch (error) {
   console.error('Error initializing TTS service:', error);
+}
+
+// Initialize speech service
+let speechService = null;
+try {
+  const credentialsPath = path.join(__dirname, 'google-credentials.json');
+  if (fs.existsSync(credentialsPath)) {
+    speechService = new SpeechService(credentialsPath);
+    console.log('Speech service initialized with credentials');
+  } else {
+    console.log('Google credentials file not found, Speech service not initialized');
+  }
+} catch (error) {
+  console.error('Error initializing Speech service:', error);
 }
 
 // Store for EMIS configuration
@@ -349,6 +443,40 @@ ipcMain.handle('synthesize-speech', async (event, text) => {
   }
 });
 
+// Speech-to-text IPC handler
+ipcMain.handle('convert-speech-to-text', async (event, audioBuffer) => {
+  console.log('Received speech-to-text request');
+  
+  // If Google Cloud Speech service is available
+  if (speechService && speechService.initialized) {
+    try {
+      const transcript = await speechService.recognizeSpeech(audioBuffer);
+      return { 
+        success: true, 
+        transcript: transcript 
+      };
+    } catch (error) {
+      console.error('Speech-to-text error:', error);
+      return { 
+        success: false, 
+        error: error.message,
+        fallback: true
+      };
+    }
+  } else {
+    // Try to use a local fallback method if available
+    console.log('Speech service not available, checking for fallbacks');
+    
+    // Add any local fallback methods here
+    
+    return { 
+      success: false, 
+      error: 'Speech-to-text service not available',
+      fallback: true
+    };
+  }
+});
+
 // Handle command execution
 ipcMain.handle('execute-command', async (event, command) => {
   console.log('Executing command:', command);
@@ -516,6 +644,93 @@ ipcMain.handle('get-mock-transcription', async () => {
     success: true, 
     transcript: randomPhrase,
     isFinal: true
+  };
+});
+
+// Add handler to save audio recordings for debugging
+ipcMain.handle('save-recording', async (event, buffer, filename) => {
+  try {
+    const savePath = path.join(app.getPath('userData'), 'recordings');
+    
+    // Create the directory if it doesn't exist
+    if (!fs.existsSync(savePath)) {
+      fs.mkdirSync(savePath, { recursive: true });
+    }
+    
+    const filePath = path.join(savePath, filename || `recording-${Date.now()}.webm`);
+    await fs.promises.writeFile(filePath, buffer);
+    
+    console.log(`Recording saved to: ${filePath}`);
+    
+    return {
+      success: true,
+      path: filePath
+    };
+  } catch (error) {
+    console.error('Error saving recording:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Add handler to get system information
+ipcMain.handle('get-system-info', () => {
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    version: process.version,
+    electronVersion: process.versions.electron,
+    chromeVersion: process.versions.chrome,
+    nodeVersion: process.versions.node,
+    emisVersion: app.getVersion(),
+    uptime: process.uptime(),
+    memoryUsage: process.memoryUsage(),
+    cpuUsage: process.cpuUsage()
+  };
+});
+
+// Add handler to toggle dev tools
+ipcMain.handle('toggle-dev-tools', () => {
+  if (mainWindow) {
+    if (mainWindow.webContents.isDevToolsOpened()) {
+      mainWindow.webContents.closeDevTools();
+      return { open: false };
+    } else {
+      mainWindow.webContents.openDevTools();
+      return { open: true };
+    }
+  }
+  return { error: 'Main window not available' };
+});
+
+// Add handlers for window control
+ipcMain.on('minimize-window', () => {
+  if (mainWindow) mainWindow.minimize();
+});
+
+ipcMain.on('maximize-window', () => {
+  if (mainWindow) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
+
+ipcMain.on('close-window', () => {
+  if (mainWindow) mainWindow.close();
+});
+
+// Add handler to get available audio devices
+ipcMain.handle('get-audio-devices', async () => {
+  // This requires additional modules like 'electron-audio-devices'
+  // For now, return a placeholder
+  return {
+    success: true,
+    devices: []
   };
 });
 

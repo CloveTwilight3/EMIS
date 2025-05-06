@@ -1,4 +1,4 @@
-// renderer.js - Enhanced speech recognition with improved voice selection logic
+// renderer.js - Enhanced with WebRTC Audio Capture and Speech-to-Text
 
 // Elements
 const startBtn = document.getElementById('start-btn');
@@ -25,19 +25,18 @@ manualCommandContainer.innerHTML = `
   </div>
 `;
 
-// Create network error notification
-const networkErrorContainer = document.createElement('div');
-networkErrorContainer.style.display = 'none';
-networkErrorContainer.style.padding = '10px';
-networkErrorContainer.style.marginBottom = '10px';
-networkErrorContainer.style.backgroundColor = '#ffeeee';
-networkErrorContainer.style.border = '1px solid #ffcccc';
-networkErrorContainer.style.borderRadius = '4px';
-networkErrorContainer.innerHTML = `
-  <p style="margin: 0; color: #cc0000;">
-    <strong>Speech Recognition Error:</strong> 
-    Network connection issue detected. Voice commands may not work.
-    Please use text input instead.
+// Create audio capture notification
+const audioStatusContainer = document.createElement('div');
+audioStatusContainer.style.padding = '10px';
+audioStatusContainer.style.marginBottom = '10px';
+audioStatusContainer.style.backgroundColor = '#eefaee';
+audioStatusContainer.style.border = '1px solid #cceecc';
+audioStatusContainer.style.borderRadius = '4px';
+audioStatusContainer.style.display = 'none';
+audioStatusContainer.innerHTML = `
+  <p style="margin: 0; color: #006600;">
+    <strong>Audio Status:</strong> 
+    <span id="audio-status-message">Audio capture ready</span>
   </p>
 `;
 
@@ -57,10 +56,30 @@ voiceSynthesisErrorContainer.innerHTML = `
   </p>
 `;
 
+// Create audio visualizer canvas
+const visualizerCanvas = document.createElement('canvas');
+visualizerCanvas.style.position = 'absolute';
+visualizerCanvas.style.top = '0';
+visualizerCanvas.style.left = '0';
+visualizerCanvas.style.width = '100%';
+visualizerCanvas.style.height = '100%';
+visualizerCanvas.style.borderRadius = '50%';
+visualizerCanvas.style.pointerEvents = 'none';
+visualizerCanvas.style.opacity = '0.7';
+
+// Add canvas to visualizer
+visualizer.appendChild(visualizerCanvas);
+
 // State
 let isListening = false;
-let recognition = null;
+let audioContext = null;
+let audioStream = null;
+let audioProcessor = null;
+let audioAnalyser = null;
+let audioData = null;
+let animationFrame = null;
 let synth = window.speechSynthesis;
+let recognition = null;
 let emisConfig = {
   wakeWord: 'emis',
   voice: 'default',
@@ -72,8 +91,6 @@ let emisConfig = {
   volume: 0.8
 };
 let usingFallbackMode = false;
-let shouldRestartRecognition = false;
-let networkErrorCount = 0;
 let voiceSynthesisErrorCount = 0;
 let voicesLoaded = false;
 let availableVoices = [];
@@ -87,8 +104,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const controlsDiv = document.querySelector('.controls');
   controlsDiv.appendChild(manualCommandContainer);
   
-  // Add error notification containers
-  controlsDiv.insertBefore(networkErrorContainer, controlsDiv.firstChild);
+  // Add status containers
+  controlsDiv.insertBefore(audioStatusContainer, controlsDiv.firstChild);
   controlsDiv.insertBefore(voiceSynthesisErrorContainer, controlsDiv.firstChild);
   
   // Set up manual command input
@@ -159,7 +176,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateStatus('Error loading config');
   }
   
-  // Initialize but don't start speech recognition
+  // Initialize WebRTC audio support
+  checkAudioSupport();
+  
+  // Initialize speech recognition
   initSpeechRecognition();
   
   // Initial greeting - with text fallback if speech fails
@@ -174,75 +194,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
-// Initialize speech recognition
+// Speech recognition with Web Speech API
 function initSpeechRecognition() {
   // Check browser support
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
     console.error('Speech Recognition API not supported');
-    updateStatus('Speech recognition not supported');
-    usingFallbackMode = true;
-    networkErrorContainer.style.display = 'block';
-    networkErrorContainer.innerHTML = `
-      <p style="margin: 0; color: #cc0000;">
-        <strong>Speech Recognition Not Available:</strong> 
-        Your browser doesn't support speech recognition.
-        Please use text input instead.
-      </p>
-    `;
     return false;
   }
   
   try {
-    // Create a new instance - don't start it yet
+    // Create a new instance
     recognition = new SpeechRecognition();
     
     // Configure recognition
-    recognition.continuous = false;  // Changed to false to avoid auto-restart issues
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
     
     recognition.onstart = () => {
-      console.log('Recognition started');
-      updateStatus('Listening...');
-      isListening = true;
-      visualizer.classList.add('listening');
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
-    };
-    
-    recognition.onend = () => {
-      console.log('Recognition ended');
-      
-      if (shouldRestartRecognition && networkErrorCount < 3) {
-        console.log('Restarting recognition as requested');
-        try {
-          recognition.start();
-        } catch (error) {
-          console.error('Error restarting recognition:', error);
-          isListening = false;
-          shouldRestartRecognition = false;
-          visualizer.classList.remove('listening');
-          startBtn.disabled = false;
-          stopBtn.disabled = true;
-          updateStatus('Idle');
-        }
-      } else {
-        isListening = false;
-        visualizer.classList.remove('listening');
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        if (statusElement.textContent !== 'Processing...') {
-          updateStatus('Idle');
-        }
-      }
+      console.log('Speech recognition started');
     };
     
     recognition.onresult = (event) => {
-      // Reset network error count on successful result
-      networkErrorCount = 0;
-      networkErrorContainer.style.display = 'none';
-      
       const transcript = Array.from(event.results)
         .map(result => result[0])
         .map(result => result.transcript)
@@ -250,94 +224,390 @@ function initSpeechRecognition() {
       
       transcriptText.textContent = transcript;
       
-      // Check for final result
-      const isFinal = event.results[0].isFinal;
-      
-      if (isFinal) {
-        shouldRestartRecognition = false;  // Stop listening while processing command
+      // Update UI for possible command
+      if (event.results[0].isFinal) {
         processCommand(transcript);
       }
     };
     
     recognition.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
-      
-      // Handle different error types
-      if (event.error === 'network') {
-        networkErrorCount++;
-        console.log(`Network error count: ${networkErrorCount}`);
-        
-        if (networkErrorCount >= 2) {
-          // Show network error message after multiple failures
-          networkErrorContainer.style.display = 'block';
-          shouldRestartRecognition = false;
-        }
-      } else if (event.error === 'no-speech') {
-        // No speech detected, just keep listening
-        console.log('No speech detected, continuing to listen');
-        networkErrorCount = 0; // Reset count on non-network errors
-      } else {
-        // Other errors - stop listening
-        shouldRestartRecognition = false;
-        isListening = false;
-        updateStatus(`Error: ${event.error}`);
-        visualizer.classList.remove('listening');
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        document.getElementById('audio-status-message').textContent = 
+          'Microphone access denied. Please check permissions.';
+      } else if (event.error === 'network') {
+        document.getElementById('audio-status-message').textContent = 
+          'Network error. Using audio sensing instead.';
       }
     };
     
-    console.log('Speech recognition initialized successfully');
+    recognition.onend = () => {
+      console.log('Speech recognition ended');
+    };
+    
     return true;
   } catch (error) {
     console.error('Error setting up speech recognition:', error);
+    return false;
+  }
+}
+
+// Check if WebRTC audio is supported
+function checkAudioSupport() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    console.error('WebRTC is not supported in this browser');
+    audioStatusContainer.style.display = 'block';
+    document.getElementById('audio-status-message').textContent = 
+      'Audio capture not supported in this browser';
+    audioStatusContainer.style.backgroundColor = '#ffeeee';
+    audioStatusContainer.style.border = '1px solid #ffcccc';
+    document.getElementById('audio-status-message').style.color = '#cc0000';
+    usingFallbackMode = true;
+    return false;
+  }
+  
+  // Audio seems to be supported
+  audioStatusContainer.style.display = 'block';
+  document.getElementById('audio-status-message').textContent = 
+    'Audio capture ready - click Start Listening to begin';
+  return true;
+}
+
+// Start audio capture with WebRTC
+async function startAudioCapture() {
+  if (audioStream) {
+    console.log('Audio already capturing');
+    return;
+  }
+  
+  try {
+    // Request microphone access
+    audioStream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      } 
+    });
+    
+    // Set up audio processing
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(audioStream);
+    
+    // Create analyser for visualization
+    audioAnalyser = audioContext.createAnalyser();
+    audioAnalyser.fftSize = 256;
+    audioData = new Uint8Array(audioAnalyser.frequencyBinCount);
+    source.connect(audioAnalyser);
+    
+    // Start visualization
+    drawVisualization();
+    
+    // Set up basic activity detection
+    setupActivityDetection(source);
+    
+    // Update status
+    isListening = true;
+    visualizer.classList.add('listening');
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    updateStatus('Listening...');
+    
+    audioStatusContainer.style.display = 'block';
+    document.getElementById('audio-status-message').textContent = 'Audio capture active';
+    
+    return true;
+  } catch (error) {
+    console.error('Error accessing microphone:', error);
+    
+    audioStatusContainer.style.display = 'block';
+    document.getElementById('audio-status-message').textContent = 
+      'Error accessing microphone: ' + (error.message || 'Permission denied');
+    audioStatusContainer.style.backgroundColor = '#ffeeee';
+    audioStatusContainer.style.border = '1px solid #ffcccc';
+    document.getElementById('audio-status-message').style.color = '#cc0000';
+    
+    updateStatus('Microphone error');
     usingFallbackMode = true;
     return false;
   }
 }
 
-// Start listening
-function startListening() {
-  if (!recognition) {
-    if (!initSpeechRecognition()) {
-      updateStatus('Speech recognition not available');
-      return;
-    }
-  }
+// Set up activity detection for audio
+function setupActivityDetection(source) {
+  // Initialize speech recognition if available
+  const speechRecognitionAvailable = initSpeechRecognition();
   
-  // Reset network error count on new attempt
-  networkErrorCount = 0;
+  // Create script processor for audio analysis
+  // NOTE: ScriptProcessorNode is deprecated but widely supported
+  // Use AudioWorklet in production for better performance
+  audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
   
+  // Variables for voice activity detection
+  let isSpeaking = false;
+  let silenceStart = null;
+  let recordingStartTime = null;
+  let silenceThreshold = 15; // Silence in milliseconds
+  let volumeThreshold = 15; // Volume level to consider as speech
+  let recordedChunks = [];
+  let mediaRecorder = null;
+  
+  // Create MediaRecorder for capturing audio for offline processing
   try {
-    shouldRestartRecognition = true;  // Set to restart when onend fires
-    recognition.start();
+    mediaRecorder = new MediaRecorder(audioStream, {
+      mimeType: 'audio/webm'
+    });
+    
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        recordedChunks.push(event.data);
+      }
+    };
+    
+    mediaRecorder.onstop = async () => {
+      if (recordedChunks.length === 0) return;
+      
+      const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+      
+      // Try to use speech recognition if available
+      if (speechRecognitionAvailable && recognition) {
+        try {
+          recognition.start();
+        } catch (error) {
+          console.error('Could not start speech recognition:', error);
+          // Fall back to manual input
+          fallbackToManualInput();
+        }
+      } else {
+        // Try to use WebSocket based recognition or local library
+        tryLocalSpeechToText(blob);
+      }
+      
+      // Reset recording buffer
+      recordedChunks = [];
+    };
   } catch (error) {
-    console.error('Error starting recognition:', error);
-    shouldRestartRecognition = false;
-    isListening = false;
-    updateStatus(`Error: ${error.message}`);
+    console.error('MediaRecorder not supported:', error);
   }
+  
+  // Connect the processor
+  source.connect(audioProcessor);
+  audioProcessor.connect(audioContext.destination);
+  
+  // Process audio
+  audioProcessor.onaudioprocess = function(event) {
+    // Get input data
+    const input = event.inputBuffer.getChannelData(0);
+    
+    // Calculate volume
+    let sum = 0;
+    for (let i = 0; i < input.length; i++) {
+      sum += Math.abs(input[i]);
+    }
+    const volume = Math.round((sum / input.length) * 100);
+    
+    // Detect speech based on volume
+    if (volume > volumeThreshold) {
+      if (!isSpeaking) {
+        isSpeaking = true;
+        silenceStart = null;
+        recordingStartTime = Date.now();
+        
+        // Visual feedback that we detected speech
+        visualizer.style.borderColor = '#6a0dad';
+        
+        // Start recording
+        if (mediaRecorder && mediaRecorder.state === 'inactive') {
+          try {
+            mediaRecorder.start();
+            console.log('Started recording audio');
+          } catch (error) {
+            console.error('Error starting MediaRecorder:', error);
+          }
+        }
+      }
+    } else {
+      if (isSpeaking) {
+        if (silenceStart === null) {
+          silenceStart = Date.now();
+        } else if (Date.now() - silenceStart > silenceThreshold * 100) {
+          // Silence long enough - end of speech
+          isSpeaking = false;
+          visualizer.style.borderColor = '';
+          
+          // Stop recording if it's been going on for at least 1 second
+          // This prevents stopping on short pauses
+          if (recordingStartTime && Date.now() - recordingStartTime > 1000) {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+              try {
+                mediaRecorder.stop();
+                console.log('Stopped recording audio, processing speech');
+                updateStatus('Processing speech...');
+              } catch (error) {
+                console.error('Error stopping MediaRecorder:', error);
+                fallbackToManualInput();
+              }
+            } else {
+              // If we couldn't record for some reason, fall back to manual input
+              fallbackToManualInput();
+            }
+          }
+        }
+      }
+    }
+  };
 }
 
-// Stop listening
-function stopListening() {
-  if (recognition) {
-    shouldRestartRecognition = false;  // Don't restart
+// Attempt local speech-to-text conversion with options
+async function tryLocalSpeechToText(audioBlob) {
+  console.log('Trying local speech-to-text options');
+  
+  // Option 1: Use browser's native Speech Recognition API (if available)
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition && !usingFallbackMode) {
     try {
-      recognition.stop();
+      // We would need to play the audio and have the recognition listen
+      // This is complex and unreliable, so we'll skip to option 2
+      console.log('Native speech recognition not practical for recorded audio');
     } catch (error) {
-      console.error('Error stopping recognition:', error);
+      console.error('Native speech recognition failed:', error);
     }
   }
   
-  isListening = false;
-  visualizer.classList.remove('listening');
-  startBtn.disabled = false;
-  stopBtn.disabled = true;
-  updateStatus('Idle');
+  // Option 2: Send to main process for server-based conversion
+  try {
+    // Send to main process for Google Cloud processing
+    const result = await window.electronAPI.convertSpeechToText(audioBlob);
+    if (result && result.success && result.transcript) {
+      console.log('Server speech-to-text successful');
+      transcriptText.textContent = result.transcript;
+      processCommand(result.transcript);
+      return;
+    } else {
+      console.log('Server speech-to-text failed or not available');
+    }
+  } catch (error) {
+    console.error('Server speech-to-text failed:', error);
+  }
+  
+  // Option 3: Fall back to manual input
+  fallbackToManualInput();
 }
 
-// Process voice commands
+// Fall back to manual text input
+function fallbackToManualInput() {
+  console.log('Falling back to manual input');
+  updateStatus('Please type your command');
+  
+  // Show the manual input with prompt
+  const manualInput = document.getElementById('manual-command-input');
+  manualInput.placeholder = "I heard something. What did you say?";
+  manualInput.focus();
+}
+
+// Draw audio visualization
+function drawVisualization() {
+  // Set up canvas
+  const canvas = visualizerCanvas;
+  const canvasCtx = canvas.getContext('2d');
+  const width = canvas.width = visualizer.clientWidth;
+  const height = canvas.height = visualizer.clientHeight;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radius = Math.min(width, height) / 2 - 10;
+  
+  // Animation loop
+  function draw() {
+    animationFrame = requestAnimationFrame(draw);
+    
+    // Clear canvas
+    canvasCtx.clearRect(0, 0, width, height);
+    
+    // Get audio data if available
+    if (audioAnalyser) {
+      audioAnalyser.getByteFrequencyData(audioData);
+      
+      // Draw circular visualizer
+      const barCount = audioData.length;
+      const barWidth = (2 * Math.PI) / barCount;
+      
+      for (let i = 0; i < barCount; i++) {
+        const barHeight = audioData[i] ? (audioData[i] / 255) * radius / 2 : 1;
+        const angle = i * barWidth;
+        
+        // Calculate positions
+        const x1 = centerX + Math.cos(angle) * (radius - barHeight);
+        const y1 = centerY + Math.sin(angle) * (radius - barHeight);
+        const x2 = centerX + Math.cos(angle) * radius;
+        const y2 = centerY + Math.sin(angle) * radius;
+        
+        // Draw line
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(x1, y1);
+        canvasCtx.lineTo(x2, y2);
+        canvasCtx.strokeStyle = `rgba(255, 105, 180, ${audioData[i] / 255})`;
+        canvasCtx.lineWidth = 2;
+        canvasCtx.stroke();
+      }
+    } else {
+      // Draw simple pulsing circle when not listening
+      const time = Date.now() / 1000;
+      const size = radius * (0.8 + Math.sin(time * 2) * 0.1);
+      
+      canvasCtx.beginPath();
+      canvasCtx.arc(centerX, centerY, size, 0, 2 * Math.PI);
+      canvasCtx.strokeStyle = 'rgba(255, 105, 180, 0.5)';
+      canvasCtx.lineWidth = 2;
+      canvasCtx.stroke();
+    }
+  }
+  
+  // Start animation
+  draw();
+}
+
+// Stop audio capture
+function stopAudioCapture() {
+  if (audioStream) {
+    // Stop all tracks
+    audioStream.getTracks().forEach(track => track.stop());
+    audioStream = null;
+    
+    // Clean up audio context
+    if (audioProcessor) {
+      audioProcessor.disconnect();
+      audioProcessor = null;
+    }
+    
+    if (audioAnalyser) {
+      audioAnalyser.disconnect();
+    }
+    
+    if (audioContext && audioContext.state !== 'closed') {
+      // Don't close the context, just suspend it
+      audioContext.suspend();
+    }
+    
+    // Stop visualization animation
+    if (animationFrame) {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = null;
+    }
+    
+    // Update status
+    isListening = false;
+    visualizer.classList.remove('listening');
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    updateStatus('Idle');
+    
+    audioStatusContainer.style.display = 'block';
+    document.getElementById('audio-status-message').textContent = 
+      'Audio capture stopped';
+  }
+}
+
+// Process commands
 async function processCommand(command) {
   if (!command) return;
   
@@ -351,16 +621,6 @@ async function processCommand(command) {
       !cleanCommand.startsWith(emisConfig.wakeWord.toLowerCase()) && 
       statusElement.textContent !== 'Processing...') {
     console.log('Wake word not detected, ignoring command');
-    
-    // Restart recognition if we're supposed to keep listening
-    if (shouldRestartRecognition && recognition) {
-      try {
-        recognition.start();
-      } catch (error) {
-        console.error('Error restarting recognition after ignored command:', error);
-      }
-    }
-    
     return;
   }
   
@@ -370,14 +630,6 @@ async function processCommand(command) {
     : cleanCommand;
   
   if (!commandWithoutWake) {
-    // Restart recognition if we're supposed to keep listening
-    if (shouldRestartRecognition && recognition) {
-      try {
-        recognition.start();
-      } catch (error) {
-        console.error('Error restarting recognition after empty command:', error);
-      }
-    }
     return;
   }
   
@@ -404,11 +656,6 @@ async function processCommand(command) {
       } catch (error) {
         console.error('Speech error, continuing with text only:', error);
       }
-      
-      // Restart listening if needed
-      if (shouldRestartRecognition) {
-        startListening();
-      }
     } else {
       updateStatus('Command failed');
       
@@ -420,11 +667,6 @@ async function processCommand(command) {
         await speakWithPromise(result.response || "I couldn't process that command.");
       } catch (error) {
         console.error('Speech error, continuing with text only:', error);
-      }
-      
-      // Restart listening if needed
-      if (shouldRestartRecognition) {
-        startListening();
       }
     }
   } catch (error) {
@@ -440,11 +682,6 @@ async function processCommand(command) {
       await speakWithPromise(errorMessage);
     } catch (error) {
       console.error('Speech error, continuing with text only:', error);
-    }
-    
-    // Restart listening if needed
-    if (shouldRestartRecognition) {
-      startListening();
     }
   }
 }
@@ -889,12 +1126,12 @@ document.head.appendChild(styleElement);
 // Event listeners
 startBtn.addEventListener('click', () => {
   console.log('Start button clicked');
-  startListening();
+  startAudioCapture();
 });
 
 stopBtn.addEventListener('click', () => {
   console.log('Stop button clicked');
-  stopListening();
+  stopAudioCapture();
 });
 
 settingsBtn.addEventListener('click', () => {
@@ -930,29 +1167,20 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     // Stop listening if page is hidden
     if (isListening) {
-      shouldRestartRecognition = false;
-      try {
-        if (recognition) recognition.stop();
-      } catch (error) {
-        console.error('Error stopping recognition on visibility change:', error);
-      }
-      isListening = false;
+      stopAudioCapture();
     }
   }
 });
 
 // When browser window is closing
 window.addEventListener('beforeunload', () => {
-  shouldRestartRecognition = false;
-  isListening = false;
-  if (recognition) {
-    try {
-      recognition.stop();
-    } catch (error) {
-      console.error('Error stopping recognition on unload:', error);
-    }
+  if (isListening) {
+    stopAudioCapture();
   }
-  synth.cancel();
+  
+  if (synth) {
+    synth.cancel();
+  }
 });
 
 // Log any uncaught errors
