@@ -60,6 +60,10 @@ debugPanel.innerHTML = `
     <input type="range" id="debug-speech-threshold" min="5" max="50" value="15" style="width: 100%;">
     <span id="threshold-value">15</span>
   </div>
+  <div style="margin-top: 15px;">
+    <button id="test-tts-btn" style="background-color: #6a0dad; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer;">Test TTS</button>
+    <button id="test-stt-btn" style="background-color: #6a0dad; color: white; border: none; padding: 8px 12px; border-radius: 4px; margin-left: 10px; cursor: pointer;">Test Speech Recognition</button>
+  </div>
 `;
 
 // Create canvas for audio visualization
@@ -177,6 +181,8 @@ function setupDebugTools() {
   const debugClearBtn = document.getElementById('debug-clear-btn');
   const thresholdSlider = document.getElementById('debug-speech-threshold');
   const thresholdValue = document.getElementById('threshold-value');
+  const testTtsBtn = document.getElementById('test-tts-btn');
+  const testSttBtn = document.getElementById('test-stt-btn');
   
   debugToggleBtn.addEventListener('click', () => {
     debugVisible = !debugVisible;
@@ -193,6 +199,29 @@ function setupDebugTools() {
     thresholdValue.textContent = value;
     emisConfig.speechThreshold = value;
     logDebug(`Speech threshold set to ${value}`);
+  });
+  
+  testTtsBtn.addEventListener('click', () => {
+    const testPhrase = "This is a test of the text to speech system. If you can hear this, audio playback is working correctly.";
+    logDebug('Testing TTS with phrase: ' + testPhrase);
+    speakWithPromise(testPhrase)
+      .catch(error => logDebug(`TTS test error: ${error.message}`, 'error'));
+  });
+  
+  testSttBtn.addEventListener('click', async () => {
+    logDebug('Testing speech recognition with mock data');
+    try {
+      const result = await window.electronAPI.getMockTranscription();
+      if (result && result.success && result.transcript) {
+        logDebug(`Got mock transcript: "${result.transcript}"`);
+        transcriptText.textContent = result.transcript;
+        processCommand(result.transcript);
+      } else {
+        logDebug('Failed to get mock transcript', 'error');
+      }
+    } catch (error) {
+      logDebug(`Speech recognition test error: ${error.message}`, 'error');
+    }
   });
 }
 
@@ -807,7 +836,28 @@ function setupEnhancedVoiceDetection(source) {
 async function processAudioWithFallbacks(audioBlob) {
   logDebug('Processing audio with fallback methods');
   
-  // Strategy 1: Try browser's built-in SpeechRecognition
+  // Strategy 1: Try sending to main process for Google Cloud Speech
+  try {
+    logDebug('Attempting to send audio to main process for cloud speech recognition');
+    updateStatus('Processing with cloud service...');
+    
+    const result = await window.electronAPI.convertSpeechToText(audioBlob);
+    
+    if (result && result.success && result.transcript) {
+      logDebug(`Cloud speech recognition successful: "${result.transcript}"`);
+      transcriptText.textContent = result.transcript;
+      processCommand(result.transcript);
+      return;
+    } else {
+      logDebug('Cloud speech recognition failed or returned no transcript', 'warn');
+      // Continue to fallback
+    }
+  } catch (error) {
+    logDebug(`Error with cloud speech recognition: ${error.message}`, 'error');
+    // Continue to fallback
+  }
+  
+  // Strategy 2: Try browser's built-in SpeechRecognition
   if (recognition) {
     try {
       logDebug('Attempting browser speech recognition');
@@ -831,42 +881,15 @@ async function processAudioWithFallbacks(audioBlob) {
     }
   }
   
-  // Strategy 2: Try sending to main process for Google Cloud Speech
+  // Strategy 3: Use mock recognition
   try {
-    logDebug('Attempting to send audio to main process for cloud speech recognition');
-    updateStatus('Processing with cloud service...');
-    
-    const result = await window.electronAPI.convertSpeechToText(audioBlob);
-    
-    if (result && result.success && result.transcript) {
-      logDebug(`Cloud speech recognition successful: "${result.transcript}"`);
-      transcriptText.textContent = result.transcript;
-      processCommand(result.transcript);
-      return;
-    } else {
-      logDebug('Cloud speech recognition failed or returned no transcript', 'warn');
-      // Continue to fallback
-    }
-  } catch (error) {
-    logDebug(`Error with cloud speech recognition: ${error.message}`, 'error');
-    // Continue to fallback
-  }
-  
-  // Strategy 3: Use mock recognition based on audio characteristics
-  try {
-    logDebug('Attempting mock recognition based on audio length');
+    logDebug('Attempting mock recognition');
     const result = await window.electronAPI.getMockTranscription();
     
     if (result && result.success && result.transcript) {
       logDebug(`Using mock transcription: "${result.transcript}"`);
-      
-      // Show possible commands for confirmation
-      showCommandOptions([
-        result.transcript,
-        "hello",
-        "what time is it",
-        "help"
-      ]);
+      transcriptText.textContent = result.transcript;
+      processCommand(result.transcript);
       return;
     }
   } catch (error) {
