@@ -57,14 +57,45 @@ debugPanel.innerHTML = `
   <button id="debug-clear-btn" style="margin-top: 10px; margin-left: 10px;">Clear</button>
   <div style="margin-top: 10px;">
     <label for="debug-speech-threshold">Speech Detection Threshold:</label>
-    <input type="range" id="debug-speech-threshold" min="5" max="50" value="15" style="width: 100%;">
-    <span id="threshold-value">15</span>
+    <input type="range" id="debug-speech-threshold" min="5" max="50" value="10" style="width: 100%;">
+    <span id="threshold-value">10</span>
   </div>
   <div style="margin-top: 15px;">
     <button id="test-tts-btn" style="background-color: #6a0dad; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer;">Test TTS</button>
     <button id="test-stt-btn" style="background-color: #6a0dad; color: white; border: none; padding: 8px 12px; border-radius: 4px; margin-left: 10px; cursor: pointer;">Test Speech Recognition</button>
   </div>
 `;
+
+// Add live threshold adjuster to debug panel
+const thresholdAdjuster = document.createElement('div');
+thresholdAdjuster.style.marginTop = '10px';
+thresholdAdjuster.innerHTML = `
+  <label for="live-threshold-slider">Live Speech Threshold Adjuster:</label>
+  <input type="range" id="live-threshold-slider" min="1" max="30" value="10" style="width: 100%;">
+  <span id="live-threshold-value">10</span>
+  <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+    <button id="apply-threshold-btn" style="background-color: #6a0dad; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;">Apply Now</button>
+    <div id="current-volume-indicator" style="padding: 5px 10px; background-color: #f0f0f0; border-radius: 4px; font-size: 12px;">Volume: 0</div>
+  </div>
+`;
+debugPanel.appendChild(thresholdAdjuster);
+
+// Create volume level visualizer
+const volumeVisualizer = document.createElement('div');
+volumeVisualizer.style.marginTop = '10px';
+volumeVisualizer.innerHTML = `
+  <div style="margin-bottom: 5px;">Real-time Volume Level:</div>
+  <div style="display: flex; align-items: center; height: 20px;">
+    <div id="volume-bar" style="height: 100%; background: linear-gradient(to right, #6a0dad, #ff69b4); width: 0%; border-radius: 3px; transition: width 0.1s;"></div>
+    <div id="threshold-line" style="position: relative; height: 100%; width: 3px; background-color: red; margin-left: -3px;"></div>
+  </div>
+  <div style="display: flex; justify-content: space-between; font-size: 10px; margin-top: 2px;">
+    <span>0</span>
+    <span>50</span>
+    <span>100</span>
+  </div>
+`;
+debugPanel.appendChild(volumeVisualizer);
 
 // Create canvas for audio visualization
 const visualizerCanvas = document.createElement('canvas');
@@ -99,7 +130,7 @@ let emisConfig = {
     localService: false
   },
   volume: 0.8,
-  speechThreshold: 15 // Volume threshold for speech detection
+  speechThreshold: 10 // Lower default threshold from 15 to 10
 };
 
 // Debug variables
@@ -109,6 +140,10 @@ const MAX_DEBUG_ENTRIES = 100;
 
 // Currently playing audio element
 let currentAudio = null;
+
+// Global volume tracking variables
+let currentVolume = 0;
+let activeVolumeThreshold = 10;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -150,6 +185,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   speakWithPromise(greeting)
     .catch(error => logDebug(`Initial greeting speech error: ${error.message}`, 'error'));
+    
+  // Set up live threshold controls
+  setupLiveThresholdControls();
 });
 
 // Debug logging function
@@ -199,6 +237,7 @@ function setupDebugTools() {
     thresholdValue.textContent = value;
     emisConfig.speechThreshold = value;
     logDebug(`Speech threshold set to ${value}`);
+    updateThresholdLine(value);
   });
   
   testTtsBtn.addEventListener('click', () => {
@@ -223,6 +262,69 @@ function setupDebugTools() {
       logDebug(`Speech recognition test error: ${error.message}`, 'error');
     }
   });
+}
+
+// Set up live threshold controls
+function setupLiveThresholdControls() {
+  const liveThresholdSlider = document.getElementById('live-threshold-slider');
+  const liveThresholdValue = document.getElementById('live-threshold-value');
+  const applyThresholdBtn = document.getElementById('apply-threshold-btn');
+  
+  if (liveThresholdSlider && liveThresholdValue && applyThresholdBtn) {
+    liveThresholdSlider.addEventListener('input', (e) => {
+      const value = parseInt(e.target.value);
+      liveThresholdValue.textContent = value;
+      updateThresholdLine(value);
+    });
+    
+    applyThresholdBtn.addEventListener('click', () => {
+      const value = parseInt(liveThresholdSlider.value);
+      emisConfig.speechThreshold = value;
+      activeVolumeThreshold = value; // Update the active threshold
+      logDebug(`Live speech threshold updated to ${value}`);
+      
+      // Also update the debug panel slider to stay in sync
+      const debugSlider = document.getElementById('debug-speech-threshold');
+      if (debugSlider) {
+        debugSlider.value = value;
+        document.getElementById('threshold-value').textContent = value;
+      }
+    });
+  }
+}
+
+// Update threshold line in the volume visualizer
+function updateThresholdLine(value) {
+  const thresholdLine = document.getElementById('threshold-line');
+  if (thresholdLine) {
+    // Convert threshold value to percentage position (0-100)
+    const percentage = Math.min(100, Math.max(0, value));
+    thresholdLine.style.marginLeft = `${percentage}%`;
+  }
+}
+
+// Update volume visualizer
+function updateVolumeVisualizer(volume) {
+  currentVolume = volume;
+  const volumeBar = document.getElementById('volume-bar');
+  const volumeIndicator = document.getElementById('current-volume-indicator');
+  
+  if (volumeBar) {
+    // Convert the volume level to a percentage (0-100)
+    const volumePercentage = Math.min(100, Math.max(0, volume));
+    volumeBar.style.width = `${volumePercentage}%`;
+    
+    // Change color based on volume level
+    if (volume > activeVolumeThreshold) {
+      volumeBar.style.background = 'linear-gradient(to right, #ff69b4, #ff0000)'; // Pink to red when over threshold
+    } else {
+      volumeBar.style.background = 'linear-gradient(to right, #6a0dad, #ff69b4)'; // Purple to pink when under threshold
+    }
+  }
+  
+  if (volumeIndicator) {
+    volumeIndicator.textContent = `Volume: ${Math.round(volume)}`;
+  }
 }
 
 // Set up manual input
@@ -466,9 +568,18 @@ function updateUIFromConfig() {
   // Set speech threshold if available
   const thresholdSlider = document.getElementById('debug-speech-threshold');
   const thresholdValue = document.getElementById('threshold-value');
+  const liveThresholdSlider = document.getElementById('live-threshold-slider');
+  const liveThresholdValue = document.getElementById('live-threshold-value');
+  
   if (thresholdSlider && emisConfig.speechThreshold) {
     thresholdSlider.value = emisConfig.speechThreshold;
     thresholdValue.textContent = emisConfig.speechThreshold;
+  }
+  
+  if (liveThresholdSlider && emisConfig.speechThreshold) {
+    liveThresholdSlider.value = emisConfig.speechThreshold;
+    liveThresholdValue.textContent = emisConfig.speechThreshold;
+    updateThresholdLine(emisConfig.speechThreshold);
   }
   
   // Find and select voice in dropdown
@@ -666,11 +777,11 @@ function setupEnhancedVoiceDetection(source) {
   let mediaRecorder = null;
   
   // Use dynamic threshold based on ambient noise
-  let volumeThreshold = emisConfig.speechThreshold || 15;
+  activeVolumeThreshold = emisConfig.speechThreshold || 10; // Lower default from 15 to 10
   let ambientNoiseLevel = 0;
   let sampleCount = 0;
   let isCalibrating = true;
-  let calibrationSamples = 20; // Number of samples to use for calibration
+  let calibrationSamples = 30; // Increase from 20 to 30 for better calibration
   
   // Create MediaRecorder for capturing speech
   try {
@@ -753,25 +864,36 @@ function setupEnhancedVoiceDetection(source) {
     for (let i = 0; i < input.length; i++) {
       sum += Math.abs(input[i]);
     }
-    const currentVolume = Math.round((sum / input.length) * 100);
+    const currentVolumeLevel = Math.round((sum / input.length) * 100);
+    
+    // Update volume visualizer
+    updateVolumeVisualizer(currentVolumeLevel);
     
     // Calibration phase to determine ambient noise level
     if (isCalibrating) {
-      ambientNoiseLevel += currentVolume;
+      ambientNoiseLevel += currentVolumeLevel;
       sampleCount++;
       
       if (sampleCount >= calibrationSamples) {
         // Calculate average ambient noise and set threshold
         ambientNoiseLevel = ambientNoiseLevel / calibrationSamples;
-        volumeThreshold = Math.max(emisConfig.speechThreshold, ambientNoiseLevel * 1.5);
-        logDebug(`Calibrated speech threshold: ${volumeThreshold} (base: ${ambientNoiseLevel})`);
+        // Use a more conservative factor for the threshold
+        activeVolumeThreshold = Math.max(emisConfig.speechThreshold, ambientNoiseLevel * 1.3);
+        logDebug(`Calibrated speech threshold: ${activeVolumeThreshold} (base: ${ambientNoiseLevel})`);
         isCalibrating = false;
+        
+        // Update UI
+        document.getElementById('threshold-value').textContent = Math.round(activeVolumeThreshold);
+        document.getElementById('debug-speech-threshold').value = Math.round(activeVolumeThreshold);
+        document.getElementById('live-threshold-value').textContent = Math.round(activeVolumeThreshold);
+        document.getElementById('live-threshold-slider').value = Math.round(activeVolumeThreshold);
+        updateThresholdLine(Math.round(activeVolumeThreshold));
       }
       return;
     }
     
     // Detect speech based on volume
-    if (currentVolume > volumeThreshold) {
+    if (currentVolumeLevel > activeVolumeThreshold) {
       if (!isSpeaking) {
         isSpeaking = true;
         silenceStart = null;
@@ -802,8 +924,8 @@ function setupEnhancedVoiceDetection(source) {
           // Longer speech segments get more silence tolerance
           const speechDuration = Date.now() - recordingStartTime;
           const silenceThreshold = Math.min(
-            1000, // Maximum silence tolerance (1 second)
-            100 + (speechDuration / 10) // Longer speech gets more tolerance
+            2000, // Increase maximum silence tolerance from 1 second to 2 seconds
+            300 + (speechDuration / 10) // Increase base threshold from 100 to 300ms
           );
           
           if (silenceDuration > silenceThreshold) {
@@ -811,9 +933,9 @@ function setupEnhancedVoiceDetection(source) {
             isSpeaking = false;
             visualizer.style.borderColor = '';
             
-            // Stop recording if it's been going for at least 500ms
-            // This prevents stopping on short pauses
-            if (recordingStartTime && Date.now() - recordingStartTime > 500) {
+            // Stop recording if it's been going for at least 750ms
+            // Increase from 500ms to 750ms to avoid cutting off short commands
+            if (recordingStartTime && Date.now() - recordingStartTime > 750) {
               if (mediaRecorder && mediaRecorder.state === 'recording') {
                 try {
                   mediaRecorder.stop();

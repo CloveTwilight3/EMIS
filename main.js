@@ -125,13 +125,13 @@ class SpeechRecognitionService {
     }
   }
 
-  // Convert speech audio to text
+  // Convert speech audio to text with enhanced sensitivity
   async recognizeSpeech(audioBuffer, options = {}) {
     if (!this.initialized) {
       throw new Error('Speech recognition service not initialized');
     }
     
-    // Default options
+    // Default options with lower sensitivity settings
     const defaultOptions = {
       encoding: 'WEBM_OPUS',
       sampleRateHertz: 48000,
@@ -139,7 +139,17 @@ class SpeechRecognitionService {
       model: 'default',
       enableAutomaticPunctuation: true,
       enableWordTimeOffsets: false,
-      maxAlternatives: 3
+      maxAlternatives: 3,
+      // Enhanced speech detection settings
+      speechContexts: [{
+        phrases: ["emis", "hello", "hey", "open", "start", "stop", "close", "what time", "volume", "up", "down"],
+        boost: 10.0 // Boost common commands
+      }],
+      useEnhanced: true, // Use enhanced model if available
+      // Adjust speech adaptation to be more forgiving with background noise
+      adaptation: {
+        speakerTag: 1
+      }
     };
     
     const requestOptions = { ...defaultOptions, ...options };
@@ -167,7 +177,9 @@ class SpeechRecognitionService {
         model: requestOptions.model,
         enableAutomaticPunctuation: requestOptions.enableAutomaticPunctuation,
         enableWordTimeOffsets: requestOptions.enableWordTimeOffsets,
-        maxAlternatives: requestOptions.maxAlternatives
+        maxAlternatives: requestOptions.maxAlternatives,
+        speechContexts: requestOptions.speechContexts,
+        useEnhanced: requestOptions.useEnhanced
       };
       
       const request = {
@@ -302,7 +314,7 @@ let emisConfig = {
   },
   wakeWord: 'emis',
   volume: 0.8,
-  speechThreshold: 15, // Default threshold for speech detection
+  speechThreshold: 10, // Lowered from 15 to 10 for better sensitivity
   personality: {
     greeting: "Hello, I'm EMIS. How can I assist you today?",
     farewell: "Goodbye. I'll be here if you need me.",
@@ -540,14 +552,33 @@ ipcMain.handle('synthesize-speech', async (event, text) => {
   }
 });
 
-// Speech-to-text IPC handler
+// Speech-to-text IPC handler with improved sensitivity
 ipcMain.handle('convert-speech-to-text', async (event, audioBuffer) => {
   console.log('Received speech-to-text request, buffer size:', audioBuffer.length);
   
   if (speechService && speechService.initialized) {
     try {
-      // Use Google Cloud Speech API
-      const result = await speechService.recognizeSpeech(audioBuffer);
+      // Use Google Cloud Speech API with enhanced sensitivity settings
+      const result = await speechService.recognizeSpeech(audioBuffer, {
+        // Add improved sensitivity options
+        speechContexts: [
+          {
+            phrases: [
+              emisConfig.wakeWord, // Prioritize the wake word
+              "emis", "open", "close", "start", "stop", "volume up", 
+              "volume down", "what time", "tell me", "who are you",
+              "hello", "hi", "hey", "thanks", "thank you", "goodbye"
+            ],
+            boost: 15.0  // Boost common phrases more strongly
+          }
+        ],
+        // Lower the endpointer sensitivity for better command recognition
+        // This makes it more likely to pick up quiet or mumbled speech
+        adaptation: {
+          speakerTag: 1
+        }
+      });
+      
       console.log('Speech recognition result:', result);
       return result;
     } catch (error) {
@@ -704,6 +735,48 @@ ipcMain.handle('execute-command', async (event, command) => {
     return {
       success: true,
       response: "You can access my settings by clicking the gear icon in the upper right corner of the window."
+    };
+  }
+  
+  // Speech threshold adjustment commands
+  if (cleanCommand.includes('lower threshold') || cleanCommand.includes('reduce threshold')) {
+    const newThreshold = Math.max(5, emisConfig.speechThreshold - 2);
+    emisConfig.speechThreshold = newThreshold;
+    saveConfig();
+    return {
+      success: true, 
+      response: `I've lowered my speech detection threshold to ${newThreshold}. This should make it easier for me to hear you.`
+    };
+  }
+  
+  if (cleanCommand.includes('raise threshold') || cleanCommand.includes('increase threshold')) {
+    const newThreshold = Math.min(30, emisConfig.speechThreshold + 2);
+    emisConfig.speechThreshold = newThreshold;
+    saveConfig();
+    return {
+      success: true, 
+      response: `I've increased my speech detection threshold to ${newThreshold}. This should reduce false activations.`
+    };
+  }
+  
+  if (cleanCommand.includes('set threshold')) {
+    // Extract number from command
+    const match = cleanCommand.match(/\d+/);
+    if (match) {
+      const newThreshold = parseInt(match[0]);
+      if (newThreshold >= 5 && newThreshold <= 30) {
+        emisConfig.speechThreshold = newThreshold;
+        saveConfig();
+        return {
+          success: true, 
+          response: `I've set my speech detection threshold to ${newThreshold}.`
+        };
+      }
+    }
+    
+    return {
+      success: true,
+      response: "Please specify a threshold value between 5 and 30."
     };
   }
   
