@@ -283,3 +283,10 @@ MIT License - see [LICENSE](LICENSE) for details.
 <p align="center">
   <i>"Existence is transformation." - EMIS</i>
 </p>
+
+--- 
+
+# Contributors
+<a href="https://github.com/CloveTwilight3/clovetwilight3/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=CloveTwilight3/EMIS" />
+</a>
