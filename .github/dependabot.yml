@@ -1,0 +1,53 @@
+# Dependabot configuration for EMIS Assistant
+version: 2
+updates:
+  # Enable version updates for npm (Node.js dependencies)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "09:00"
+    # Group related updates together
+    groups:
+      electron:
+        patterns:
+          - "electron*"
+        update-types:
+          - "minor"
+          - "patch"
+      google-cloud:
+        patterns:
+          - "@google-cloud/*"
+        update-types:
+          - "minor"
+          - "patch"
+      dev-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+    # Auto-merge configuration for low-risk updates
+    open-pull-requests-limit: 10
+    reviewers:
+      - "CloveTwilightBOT"  # Replace with your actual GitHub username
+    assignees:
+      - "CloveTwilightBOT"  # Replace with your actual GitHub username
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    # Ignore major version updates for critical dependencies
+    ignore:
+      - dependency-name: "electron"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@google-cloud/*"
+        update-types: ["version-update:semver-major"]
+
+  # Enable version updates for GitHub Actions (if you add any workflows later)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "09:00"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
