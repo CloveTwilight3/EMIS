@@ -39,7 +39,7 @@
   "dependencies": {
     "@google-cloud/speech": "^7.0.1",
     "@google-cloud/text-to-speech": "^6.0.1",
-    "axios": "^1.9.0",
+    "axios": "^1.11.0",
     "node-record-lpcm16": "^1.0.1",
     "node-vad": "^1.1.4",
     "play-sound": "^1.1.6"
