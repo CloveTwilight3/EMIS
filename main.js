@@ -907,7 +907,7 @@ function openApplication(appName) {
   const appMap = {
     // Common applications
     'spotify': {
-      win: 'spotify',
+      win: path.join(process.env.APPDATA, 'Spotify', 'Spotify.exe'),
       mac: 'Spotify',
       linux: 'spotify',
       flatpak: 'com.spotify.Client'
