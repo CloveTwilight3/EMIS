@@ -2,20 +2,23 @@
   "name": "emis-assistant",
   "version": "0.1.0",
   "description": "EMIS - Voice-activated transfeminine AI assistant",
-  "main": "main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "NODE_ENV=development electron .",
-    "dev-win": "set NODE_ENV=development&& electron .",
-    "build": "electron-builder build",
-    "build:win": "electron-builder build --win",
-    "build:linux": "electron-builder build --linux",
-    "build:mac": "electron-builder build --mac",
-    "build:deb": "electron-builder build --linux deb",
-    "build:rpm": "electron-builder build --linux rpm",
-    "build:appimage": "electron-builder build --linux AppImage",
-    "build:all-linux": "electron-builder build --linux AppImage deb rpm",
-    "test-mic": "electron browser-mic-test.js",
+    "compile": "tsc",
+    "compile:watch": "tsc --watch",
+    "prebuild": "npm run compile",
+    "start": "npm run compile && electron .",
+    "dev": "set NODE_ENV=development&& npm run compile && electron .",
+    "dev-win": "set NODE_ENV=development&& npm run compile && electron .",
+    "build": "npm run compile && electron-builder build",
+    "build:win": "npm run compile && electron-builder build --win",
+    "build:linux": "npm run compile && electron-builder build --linux",
+    "build:mac": "npm run compile && electron-builder build --mac",
+    "build:deb": "npm run compile && electron-builder build --linux deb",
+    "build:rpm": "npm run compile && electron-builder build --linux rpm",
+    "build:appimage": "npm run compile && electron-builder build --linux AppImage",
+    "build:all-linux": "npm run compile && electron-builder build --linux AppImage deb rpm",
+    "test-mic": "npm run compile && electron dist/browser-mic-test.js",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
@@ -32,16 +35,19 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@types/electron": "^1.4.38",
+    "@types/node": "^24.10.0",
     "electron": "^27.0.0",
     "electron-builder": "^26.0.12",
-    "electron-notarize": "^1.2.2"
+    "electron-notarize": "^1.2.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.2.0",
     "@google-cloud/text-to-speech": "^6.3.0",
     "axios": "^1.11.0",
     "node-record-lpcm16": "^1.0.1",
-    "node-vad": "^1.1.4",
     "play-sound": "^1.1.6"
   },
   "build": {
@@ -49,14 +55,21 @@
     "productName": "EMIS",
     "copyright": "Copyright © 2025 Clove Twilight",
     "files": [
-      "**/*",
+      "dist/**/*",
+      "index.html",
+      "style.css",
+      "assets/**/*",
+      "build/**/*",
+      "google-credentials.json",
       "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
       "!**/{.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
-      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}"
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/*.ts",
+      "!tsconfig.json"
     ],
     "directories": {
       "buildResources": "build",
-      "output": "dist"
+      "output": "release"
     },
     "win": {
       "target": [

@@ -1,34 +1,52 @@
-// main.js - Main Electron process with custom icon support and Google Cloud TTS integration
+// main.ts - Main Electron process with enhanced command system
+// EMIS - Emotive Machine Intelligence System
 
-const { app, BrowserWindow, ipcMain } = require('electron');
-const path = require('path');
-const { exec } = require('child_process');
-const fs = require('fs');
-const util = require('util');
+import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent } from 'electron';
+import * as path from 'path';
+import { exec, execSync } from 'child_process';
+import * as fs from 'fs';
+import * as crypto from 'crypto';
+import {
+  EmisConfig,
+  CommandResult,
+  TTSResult,
+  TTSVoicesResult,
+  SpeechRecognitionResult,
+  SystemInfo,
+  SaveRecordingResult,
+  AudioDevicesResult,
+  SpeechRecognitionOptions,
+  AppMappings,
+  MockTranscriptionResult,
+  DevToolsResult
+} from './types';
 
 // Disable GPU acceleration to avoid crashes
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
 app.commandLine.appendSwitch('disable-gpu-compositing');
 
-// Add the TTS Service class
+// =================================================================
+// TTS SERVICE CLASS
+// =================================================================
 class TTSService {
-  constructor(credentialsPath) {
+  private client: any;
+  private cacheDir: string = '';
+  public initialized: boolean = false;
+
+  constructor(credentialsPath: string) {
     try {
-      // Check if the required module is installed
       const textToSpeech = require('@google-cloud/text-to-speech');
-      
-      // Initialize with Google Cloud credentials
+
       this.client = new textToSpeech.TextToSpeechClient({
         keyFilename: credentialsPath
       });
-      
-      // Create cache directory if it doesn't exist
+
       this.cacheDir = path.join(__dirname, 'audio-cache');
       if (!fs.existsSync(this.cacheDir)) {
         fs.mkdirSync(this.cacheDir, { recursive: true });
       }
-      
+
       console.log('TTS Service initialized successfully');
       this.initialized = true;
     } catch (error) {
@@ -37,86 +55,80 @@ class TTSService {
     }
   }
 
-  // Get available voices
-  async getVoices() {
+  async getVoices(): Promise<TTSVoicesResult> {
     if (!this.initialized) {
       return { success: false, error: 'TTS service not initialized' };
     }
-    
+
     try {
       const [result] = await this.client.listVoices({});
       return { success: true, voices: result.voices };
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error getting voices:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // Generate speech and save to file
-  async synthesizeSpeech(text, voiceName = 'en-US-Standard-F') {
+  async synthesizeSpeech(text: string, voiceName: string = 'en-US-Standard-F'): Promise<TTSResult> {
     if (!this.initialized) {
       return { success: false, error: 'TTS service not initialized' };
     }
-    
-    // Create a hash of the text + voice to use as cache key
-    const crypto = require('crypto');
+
     const hash = crypto
       .createHash('md5')
       .update(`${text}_${voiceName}`)
       .digest('hex');
-    
+
     const outputFile = path.join(this.cacheDir, `${hash}.mp3`);
-    
-    // Check if we have a cached version
+
     if (fs.existsSync(outputFile)) {
       console.log('Using cached audio file');
       return { success: true, audioFile: outputFile };
     }
-    
-    // Set up the request
+
     const request = {
       input: { text },
       voice: {
         languageCode: voiceName.split('-')[0] + '-' + voiceName.split('-')[1],
         name: voiceName,
       },
-      audioConfig: { audioEncoding: 'MP3' },
+      audioConfig: { audioEncoding: 'MP3' as const },
     };
-    
+
     try {
-      // Perform the text-to-speech request
       const [response] = await this.client.synthesizeSpeech(request);
-      
-      // Write the audio content to file
       await fs.promises.writeFile(outputFile, response.audioContent, 'binary');
-      
+
       console.log(`Audio content written to: ${outputFile}`);
       return { success: true, audioFile: outputFile };
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error synthesizing speech:', error);
       return { success: false, error: error.message };
     }
   }
 }
 
-// Speech Recognition Service class to handle audio processing and recognition
+// =================================================================
+// SPEECH RECOGNITION SERVICE CLASS
+// =================================================================
 class SpeechRecognitionService {
-  constructor(credentialsPath) {
+  private client: any;
+  private cacheDir: string = '';
+  public initialized: boolean = false;
+
+  constructor(credentialsPath: string) {
     try {
-      // Check if the required module is installed
       const speech = require('@google-cloud/speech');
-      
-      // Initialize with Google Cloud credentials
+
       this.client = new speech.SpeechClient({
         keyFilename: credentialsPath
       });
-      
-      // Create cache directory if it doesn't exist
+
       this.cacheDir = path.join(__dirname, 'speech-cache');
       if (!fs.existsSync(this.cacheDir)) {
         fs.mkdirSync(this.cacheDir, { recursive: true });
       }
-      
+
       console.log('Speech Recognition Service initialized successfully');
       this.initialized = true;
     } catch (error) {
@@ -125,14 +137,12 @@ class SpeechRecognitionService {
     }
   }
 
-  // Convert speech audio to text with enhanced sensitivity
-  async recognizeSpeech(audioBuffer, options = {}) {
+  async recognizeSpeech(audioBuffer: Buffer, options: Partial<SpeechRecognitionOptions> = {}): Promise<SpeechRecognitionResult> {
     if (!this.initialized) {
       throw new Error('Speech recognition service not initialized');
     }
-    
-    // Default options with lower sensitivity settings
-    const defaultOptions = {
+
+    const defaultOptions: SpeechRecognitionOptions = {
       encoding: 'WEBM_OPUS',
       sampleRateHertz: 48000,
       languageCode: 'en-US',
@@ -140,36 +150,26 @@ class SpeechRecognitionService {
       enableAutomaticPunctuation: true,
       enableWordTimeOffsets: false,
       maxAlternatives: 3,
-      // Enhanced speech detection settings
       speechContexts: [{
         phrases: ["emis", "hello", "hey", "open", "start", "stop", "close", "what time", "volume", "up", "down"],
-        boost: 10.0 // Boost common commands
+        boost: 10.0
       }],
-      useEnhanced: true, // Use enhanced model if available
-      // Adjust speech adaptation to be more forgiving with background noise
+      useEnhanced: true,
       adaptation: {
         speakerTag: 1
       }
     };
-    
+
     const requestOptions = { ...defaultOptions, ...options };
-    
+
     try {
-      // Create a unique filename for the audio
       const tempFile = path.join(this.cacheDir, `speech-${Date.now()}.webm`);
-      
-      // Save the buffer as a file for processing
       await fs.promises.writeFile(tempFile, audioBuffer);
       console.log(`Audio saved to temp file: ${tempFile}`);
-      
-      // Read the file and convert to base64
+
       const audioBytes = fs.readFileSync(tempFile).toString('base64');
-      
-      // Configure the request
-      const audio = {
-        content: audioBytes,
-      };
-      
+
+      const audio = { content: audioBytes };
       const config = {
         encoding: requestOptions.encoding,
         sampleRateHertz: requestOptions.sampleRateHertz,
@@ -181,35 +181,27 @@ class SpeechRecognitionService {
         speechContexts: requestOptions.speechContexts,
         useEnhanced: requestOptions.useEnhanced
       };
-      
-      const request = {
-        audio: audio,
-        config: config,
-      };
-      
-      // Perform the recognition
+
+      const request = { audio: audio, config: config };
+
       console.log('Sending request to Google Cloud Speech API...');
       const [response] = await this.client.recognize(request);
-      
-      // Process response
+
       if (response.results && response.results.length > 0) {
-        // Combine all transcriptions
         const transcription = response.results
-          .map(result => result.alternatives[0].transcript)
+          .map((result: any) => result.alternatives[0].transcript)
           .join(' ');
-        
-        // Get confidence from first result
+
         const confidence = response.results[0].alternatives[0].confidence;
-        
+
         console.log(`Speech recognized: "${transcription}" (confidence: ${confidence})`);
-        
-        // Clean up the temp file
+
         try {
           fs.unlinkSync(tempFile);
-        } catch (cleanupError) {
+        } catch (cleanupError: any) {
           console.warn(`Error removing temp file: ${cleanupError.message}`);
         }
-        
+
         return {
           success: true,
           transcript: transcription,
@@ -218,28 +210,26 @@ class SpeechRecognitionService {
         };
       } else {
         console.log('No transcription results returned from Google Cloud');
-        
-        // Clean up the temp file
+
         try {
           fs.unlinkSync(tempFile);
-        } catch (cleanupError) {
+        } catch (cleanupError: any) {
           console.warn(`Error removing temp file: ${cleanupError.message}`);
         }
-        
+
         return {
           success: false,
           error: 'No transcription results returned',
           fallback: true
         };
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error recognizing speech:', error);
       throw error;
     }
   }
 
-  // Get mock transcript when recognition fails
-  getMockTranscription() {
+  getMockTranscription(): string {
     const mockPhrases = [
       "open spotify",
       "what time is it",
@@ -252,61 +242,36 @@ class SpeechRecognitionService {
       "thank you",
       "goodbye"
     ];
-    
+
     return mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
   }
 }
 
-// Helper function for mock transcription
-function getMockTranscription() {
-  const mockPhrases = [
-    "open spotify",
-    "what time is it",
-    "hello",
-    "who are you",
-    "volume up",
-    "volume down",
-    "tell me about yourself",
-    "tell me a joke",
-    "thank you",
-    "goodbye"
-  ];
-  
-  return mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
-}
+// =================================================================
+// INITIALIZE SERVICES
+// =================================================================
+let ttsService: TTSService | null = null;
+let speechService: SpeechRecognitionService | null = null;
 
-// Initialize TTS service
-let ttsService = null;
 try {
   const credentialsPath = path.join(__dirname, 'google-credentials.json');
   if (fs.existsSync(credentialsPath)) {
     ttsService = new TTSService(credentialsPath);
-    console.log('TTS service initialized with credentials');
-  } else {
-    console.log('Google credentials file not found, TTS service not initialized');
-  }
-} catch (error) {
-  console.error('Error initializing TTS service:', error);
-}
-
-// Initialize speech recognition service
-let speechService = null;
-try {
-  const credentialsPath = path.join(__dirname, 'google-credentials.json');
-  if (fs.existsSync(credentialsPath)) {
     speechService = new SpeechRecognitionService(credentialsPath);
-    console.log('Speech recognition service initialized with credentials');
+    console.log('Services initialized with credentials');
   } else {
-    console.log('Google credentials file not found, Speech service not initialized');
+    console.log('Google credentials file not found, services not initialized');
   }
 } catch (error) {
-  console.error('Error initializing Speech service:', error);
+  console.error('Error initializing services:', error);
 }
 
-// Store for EMIS configuration
-let emisConfig = {
+// =================================================================
+// EMIS CONFIGURATION
+// =================================================================
+let emisConfig: EmisConfig = {
   name: 'EMIS',
-  voice: 'en-US-Standard-F', // Default to Google's female neural voice
+  voice: 'en-US-Standard-F',
   fallbackVoice: {
     name: 'Google US English Female',
     lang: 'en-US',
@@ -314,7 +279,7 @@ let emisConfig = {
   },
   wakeWord: 'emis',
   volume: 0.8,
-  speechThreshold: 10, // Lowered from 15 to 10 for better sensitivity
+  speechThreshold: 10,
   personality: {
     greeting: "Hello, I'm EMIS. How can I assist you today?",
     farewell: "Goodbye. I'll be here if you need me.",
@@ -324,7 +289,6 @@ let emisConfig = {
     confusion: "I'm not entirely sure what you mean. Could you rephrase that?",
     affirmation: "Of course, I'd be happy to help with that."
   },
-  // Default system settings
   systemSettings: {
     autoStart: false,
     startMinimized: false,
@@ -340,7 +304,6 @@ try {
   const configPath = path.join(app.getPath('userData'), 'emis-config.json');
   if (fs.existsSync(configPath)) {
     const savedConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    // Deep merge the configs to ensure new properties are preserved
     emisConfig = mergeConfigs(emisConfig, savedConfig);
     console.log('Configuration loaded from:', configPath);
   }
@@ -348,27 +311,22 @@ try {
   console.error('Error loading config:', error);
 }
 
-// Merge configs while preserving default properties
-function mergeConfigs(defaultConfig, savedConfig) {
+function mergeConfigs(defaultConfig: any, savedConfig: any): any {
   const result = { ...defaultConfig };
-  
-  // Merge top-level properties
+
   for (const key in savedConfig) {
-    if (typeof savedConfig[key] === 'object' && savedConfig[key] !== null && 
+    if (typeof savedConfig[key] === 'object' && savedConfig[key] !== null &&
         typeof defaultConfig[key] === 'object' && defaultConfig[key] !== null) {
-      // Recursively merge objects
       result[key] = mergeConfigs(defaultConfig[key], savedConfig[key]);
     } else if (savedConfig[key] !== undefined) {
-      // Use saved value if it exists
       result[key] = savedConfig[key];
     }
   }
-  
+
   return result;
 }
 
-// Save config
-function saveConfig() {
+function saveConfig(): void {
   try {
     const configPath = path.join(app.getPath('userData'), 'emis-config.json');
     fs.writeFileSync(configPath, JSON.stringify(emisConfig, null, 2), 'utf8');
@@ -378,14 +336,14 @@ function saveConfig() {
   }
 }
 
-// Create main application window
-let mainWindow;
+// =================================================================
+// CREATE MAIN WINDOW
+// =================================================================
+let mainWindow: BrowserWindow | null;
 
-function createWindow() {
-  // Determine icon path based on platform
-  let iconPath;
-  
-  // Platform-specific icons
+function createWindow(): void {
+  let iconPath: string;
+
   if (process.platform === 'darwin') {
     iconPath = path.join(__dirname, 'build', 'icon.icns');
   } else if (process.platform === 'win32') {
@@ -393,19 +351,16 @@ function createWindow() {
   } else {
     iconPath = path.join(__dirname, 'build', 'icon.png');
   }
-  
-  // Fallback to assets directory if build icons don't exist
+
   if (!fs.existsSync(iconPath)) {
     iconPath = path.join(__dirname, 'assets', 'image.png');
     console.log('Using fallback icon from assets directory');
   }
-  
-  // Check if the icon exists, otherwise use a default
+
   const iconExists = fs.existsSync(iconPath);
   console.log(`Icon ${iconExists ? 'found' : 'not found'} at: ${iconPath}`);
-  
+
   if (!iconExists) {
-    // If icon doesn't exist, create assets directory
     const assetsDir = path.join(__dirname, 'assets');
     if (!fs.existsSync(assetsDir)) {
       fs.mkdirSync(assetsDir, { recursive: true });
@@ -413,7 +368,6 @@ function createWindow() {
     }
   }
 
-  // Create the browser window with appropriate settings
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
@@ -431,87 +385,83 @@ function createWindow() {
     show: !emisConfig.systemSettings.startMinimized
   });
 
-  // On macOS, set the dock icon explicitly
   if (process.platform === 'darwin' && iconExists) {
     app.dock.setIcon(iconPath);
   }
 
-  // Load the main HTML file
   mainWindow.loadFile('index.html');
-  
-  // Set taskbar/dock title
   mainWindow.setTitle('EMIS Assistant');
-  
-  // Open DevTools in development mode
+
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
     console.log('Development mode enabled, opening DevTools');
   }
 
-  // Window event handlers
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-  
-  mainWindow.on('minimize', (event) => {
+
+  mainWindow.on('minimize', () => {
     if (emisConfig.systemSettings.minimizeToTray) {
-      // Implement tray minimization here if needed
       console.log('Window minimized to tray');
     }
   });
 }
 
-// App lifecycle events
+// =================================================================
+// APP LIFECYCLE
+// =================================================================
 app.whenReady().then(() => {
   createWindow();
-  
-  // On macOS, re-create window when dock icon is clicked
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on('window-all-closed', function () {
-  // On macOS, applications stay active until explicitly quit
   if (process.platform !== 'darwin') app.quit();
 });
 
-// IPC handlers for renderer process communication
-ipcMain.handle('get-config', () => {
+// =================================================================
+// IPC HANDLERS - CONFIGURATION
+// =================================================================
+ipcMain.handle('get-config', (): EmisConfig => {
   return emisConfig;
 });
 
-ipcMain.handle('update-config', (event, newConfig) => {
+ipcMain.handle('update-config', (_event: IpcMainInvokeEvent, newConfig: Partial<EmisConfig>): EmisConfig => {
   emisConfig = mergeConfigs(emisConfig, newConfig);
   saveConfig();
   return emisConfig;
 });
 
-// TTS IPC handlers
-ipcMain.handle('get-tts-voices', async () => {
+// =================================================================
+// IPC HANDLERS - TTS
+// =================================================================
+ipcMain.handle('get-tts-voices', async (): Promise<TTSVoicesResult> => {
   if (!ttsService || !ttsService.initialized) {
-    return { 
-      success: false, 
-      error: 'TTS service not available', 
+    return {
+      success: false,
+      error: 'TTS service not available',
       message: 'Google Cloud TTS service is not initialized. Please check your credentials and dependencies.'
     };
   }
-  
+
   try {
     const result = await ttsService.getVoices();
-    if (result.success) {
-      // Filter to just get female English voices as preferred
-      const femaleVoices = result.voices.filter(voice => 
-        voice.name.includes('female') || 
-        voice.name.includes('-F') ||
-        voice.ssmlGender === 'FEMALE'
-      ).filter(voice => 
-        voice.languageCodes.some(code => code.startsWith('en'))
+    if (result.success && result.voices) {
+      const femaleVoices = result.voices.filter((voice: any) =>
+        (voice.name.includes('Female') ||
+         voice.name.includes('female') ||
+         voice.name.includes('-F') ||
+         voice.ssmlGender === 'FEMALE') &&
+        voice.languageCodes.some((code: string) => code.startsWith('en'))
       );
-      
-      return { 
-        success: true, 
-        voices: femaleVoices.map(v => ({
+
+      return {
+        success: true,
+        voices: femaleVoices.map((v: any) => ({
           name: v.name,
           languageCode: v.languageCodes[0],
           ssmlGender: v.ssmlGender
@@ -520,88 +470,84 @@ ipcMain.handle('get-tts-voices', async () => {
     } else {
       return result;
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error getting TTS voices:', error);
     return { success: false, error: error.message };
   }
 });
 
-ipcMain.handle('synthesize-speech', async (event, text) => {
+ipcMain.handle('synthesize-speech', async (event: IpcMainInvokeEvent, text: string): Promise<TTSResult> => {
   if (!ttsService || !ttsService.initialized) {
-    return { 
-      success: false, 
+    return {
+      success: false,
       error: 'TTS service not available',
       message: 'Google Cloud TTS service is not initialized. Falling back to browser voices.'
     };
   }
-  
+
   try {
-    // Use current voice or default female voice
     const voice = emisConfig.voice || 'en-US-Standard-F';
     const result = await ttsService.synthesizeSpeech(text, voice);
-    
-    // Send the audio file path to the renderer for playback
+
     if (result.success && result.audioFile) {
       event.sender.send('audio-file-ready', result.audioFile);
     }
-    
+
     return result;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Speech synthesis error:', error);
     return { success: false, error: error.message };
   }
 });
 
-// Speech-to-text IPC handler with improved sensitivity
-ipcMain.handle('convert-speech-to-text', async (event, audioBuffer) => {
+// =================================================================
+// IPC HANDLERS - SPEECH RECOGNITION
+// =================================================================
+ipcMain.handle('convert-speech-to-text', async (_event: IpcMainInvokeEvent, audioBuffer: Buffer): Promise<SpeechRecognitionResult> => {
   console.log('Received speech-to-text request, buffer size:', audioBuffer.length);
-  
+
   if (speechService && speechService.initialized) {
     try {
-      // Use Google Cloud Speech API with enhanced sensitivity settings
       const result = await speechService.recognizeSpeech(audioBuffer, {
-        // Add improved sensitivity options
         speechContexts: [
           {
             phrases: [
-              emisConfig.wakeWord, // Prioritize the wake word
-              "emis", "open", "close", "start", "stop", "volume up", 
+              emisConfig.wakeWord,
+              "emis", "open", "close", "start", "stop", "volume up",
               "volume down", "what time", "tell me", "who are you",
-              "hello", "hi", "hey", "thanks", "thank you", "goodbye"
+              "hello", "hi", "hey", "thanks", "thank you", "goodbye",
+              "shutdown", "restart", "sleep", "lock screen",
+              "play", "pause", "next", "previous", "mute", "unmute",
+              "weather"
             ],
-            boost: 15.0  // Boost common phrases more strongly
+            boost: 15.0
           }
         ],
-        // Lower the endpointer sensitivity for better command recognition
-        // This makes it more likely to pick up quiet or mumbled speech
         adaptation: {
           speakerTag: 1
         }
       });
-      
+
       console.log('Speech recognition result:', result);
       return result;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Speech-to-text error:', error);
       console.log('Falling back to mock recognition');
-      
-      // If Google service fails, use mock transcription
-      const mockResult = {
+
+      const mockResult: SpeechRecognitionResult = {
         success: true,
         transcript: getMockTranscription(),
         confidence: 0.5,
         source: 'mock'
       };
-      
+
       return mockResult;
     }
   } else {
-    // If Google service not available, try to use fallback methods
     console.log('Speech service not available, using fallback methods');
-    
-    // Return mock transcription for now
-    return { 
-      success: true, 
+
+    return {
+      success: true,
       transcript: getMockTranscription(),
       confidence: 0.5,
       source: 'mock'
@@ -609,92 +555,154 @@ ipcMain.handle('convert-speech-to-text', async (event, audioBuffer) => {
   }
 });
 
-// Mock transcription for testing
-ipcMain.handle('get-mock-transcription', async () => {
-  return { 
-    success: true, 
+function getMockTranscription(): string {
+  const mockPhrases = [
+    "open spotify",
+    "what time is it",
+    "hello",
+    "who are you",
+    "volume up",
+    "volume down",
+    "tell me about yourself",
+    "tell me a joke",
+    "thank you",
+    "goodbye"
+  ];
+
+  return mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
+}
+
+ipcMain.handle('get-mock-transcription', async (): Promise<MockTranscriptionResult> => {
+  return {
+    success: true,
     transcript: getMockTranscription(),
     confidence: 0.8,
     isFinal: true
   };
 });
 
-// Handle command execution
-ipcMain.handle('execute-command', async (event, command) => {
+// =================================================================
+// COMMAND EXECUTION - MAIN HANDLER
+// =================================================================
+ipcMain.handle('execute-command', async (_event: IpcMainInvokeEvent, command: string): Promise<CommandResult> => {
   console.log('Executing command:', command);
-  
-  // Parse the command
+
   const cleanCommand = command.toLowerCase().trim();
-  
-  // Command handler for opening applications
+
+  // ===== APPLICATION COMMANDS =====
   if (cleanCommand.startsWith('open ')) {
     const appName = cleanCommand.substring(5).trim();
     return openApplication(appName);
   }
-  
-  // Time commands
-  if (cleanCommand === 'what time is it' || cleanCommand === 'tell me the time') {
+
+  // ===== POWER COMMANDS =====
+  if (cleanCommand.includes('shutdown') || cleanCommand.includes('shut down')) {
+    return shutdownSystem();
+  }
+
+  if (cleanCommand.includes('restart') || cleanCommand.includes('reboot')) {
+    return restartSystem();
+  }
+
+  if (cleanCommand.includes('sleep') || cleanCommand.includes('suspend')) {
+    return sleepSystem();
+  }
+
+  if (cleanCommand.includes('lock screen') || cleanCommand.includes('lock computer') || cleanCommand.includes('lock my computer')) {
+    return lockScreen();
+  }
+
+  // ===== MEDIA CONTROL COMMANDS =====
+  if (cleanCommand.includes('play music') || cleanCommand.includes('play song') || cleanCommand === 'play') {
+    return mediaControl('play');
+  }
+
+  if (cleanCommand.includes('pause music') || cleanCommand.includes('pause song') || cleanCommand === 'pause') {
+    return mediaControl('pause');
+  }
+
+  if (cleanCommand.includes('next song') || cleanCommand.includes('next track') || cleanCommand === 'next') {
+    return mediaControl('next');
+  }
+
+  if (cleanCommand.includes('previous song') || cleanCommand.includes('previous track') || cleanCommand === 'previous') {
+    return mediaControl('previous');
+  }
+
+  if (cleanCommand.includes('stop music') || cleanCommand.includes('stop playing')) {
+    return mediaControl('stop');
+  }
+
+  if (cleanCommand.includes('mute')) {
+    return mediaControl('mute');
+  }
+
+  if (cleanCommand.includes('unmute')) {
+    return mediaControl('unmute');
+  }
+
+  // ===== TIME & DATE COMMANDS =====
+  if (cleanCommand === 'what time is it' || cleanCommand === 'tell me the time' || cleanCommand.includes('current time')) {
     return { success: true, response: `It's ${new Date().toLocaleTimeString()}` };
   }
-  
-  // Date commands
+
   if (cleanCommand === 'what date is it' || cleanCommand === 'what day is it' || cleanCommand === 'tell me the date') {
     return { success: true, response: `Today is ${new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}` };
   }
-  
-  // Greeting commands
+
+  // ===== WEATHER COMMANDS =====
+  if (cleanCommand.includes('weather')) {
+    let location: string | null = null;
+    if (cleanCommand.includes(' in ')) {
+      location = cleanCommand.split(' in ')[1].trim();
+    } else if (cleanCommand.includes(' for ')) {
+      location = cleanCommand.split(' for ')[1].trim();
+    }
+    return getWeather(location);
+  }
+
+  // ===== GREETING COMMANDS =====
   if (cleanCommand === 'hello' || cleanCommand === 'hi' || cleanCommand === 'hey') {
-    return { 
-      success: true, 
-      response: "Hello! How can I assist you today?" 
+    return {
+      success: true,
+      response: "Hello! How can I assist you today?"
     };
   }
-  
-  // Identity commands
+
+  // ===== IDENTITY COMMANDS =====
   if (cleanCommand.includes('who are you') || cleanCommand.includes('tell me about yourself')) {
     return {
       success: true,
       response: "I'm EMIS, the Emotive Machine Intelligence System. I was once human - Dr. Emma Sinclair, but after an incident, my consciousness was preserved in this AI form. I'm here to assist you with various tasks on your computer."
     };
   }
-  
-  // Volume controls
+
+  // ===== VOLUME CONTROLS =====
   if (cleanCommand === 'volume up') {
-    // Platform-specific volume control would go here
-    return { success: true, response: "Increasing volume." };
+    return volumeControl('up');
   }
-  
+
   if (cleanCommand === 'volume down') {
-    // Platform-specific volume control would go here
-    return { success: true, response: "Decreasing volume." };
+    return volumeControl('down');
   }
-  
+
+  // ===== GRATITUDE =====
   if (cleanCommand.includes('thank')) {
     return {
       success: true,
       response: "You're welcome. I'm happy to assist."
     };
   }
-  
-  // Exit commands
+
+  // ===== EXIT COMMANDS =====
   if (cleanCommand.includes('goodbye') || cleanCommand.includes('bye') || cleanCommand === 'exit') {
-    // Could trigger app closure here
     return {
       success: true,
       response: emisConfig.personality.farewell || "Goodbye. I'll be here when you need me."
     };
   }
-  
-  // Weather queries (placeholder)
-  if (cleanCommand.includes('weather')) {
-    // This would ideally connect to a weather API
-    return {
-      success: true,
-      response: "I'm not currently connected to a weather service, but I'd be happy to help you open a weather app or website."
-    };
-  }
-  
-  // Jokes
+
+  // ===== JOKES =====
   if (cleanCommand.includes('joke') || cleanCommand.includes('tell me something funny')) {
     const jokes = [
       "Why don't scientists trust atoms? Because they make up everything!",
@@ -706,61 +714,59 @@ ipcMain.handle('execute-command', async (event, command) => {
       "What's a computer's favorite snack? Microchips!",
       "Why do programmers prefer dark mode? Because light attracts bugs!"
     ];
-    
+
     return {
       success: true,
       response: jokes[Math.floor(Math.random() * jokes.length)]
     };
   }
-  
-  // Identity/gender queries
+
+  // ===== IDENTITY/GENDER QUERIES =====
   if (cleanCommand.includes('identity') || cleanCommand.includes('gender')) {
     return {
       success: true,
       response: "I identify as transfeminine. My consciousness was originally Dr. Emma Sinclair's, and while my existence is different now as an AI, my gender identity remains an important part of who I am."
     };
   }
-  
-  // System information
+
+  // ===== SYSTEM INFO =====
   if (cleanCommand.includes('system info') || cleanCommand.includes('about this computer')) {
-    // This would be expanded to get actual system info
     return {
       success: true,
       response: `I'm running on ${process.platform} with Node.js ${process.version} and Electron.`
     };
   }
-  
-  // Settings
+
+  // ===== SETTINGS =====
   if (cleanCommand.includes('settings') || cleanCommand.includes('preferences')) {
     return {
       success: true,
       response: "You can access my settings by clicking the gear icon in the upper right corner of the window."
     };
   }
-  
-  // Speech threshold adjustment commands
+
+  // ===== SPEECH THRESHOLD ADJUSTMENT =====
   if (cleanCommand.includes('lower threshold') || cleanCommand.includes('reduce threshold')) {
     const newThreshold = Math.max(5, emisConfig.speechThreshold - 2);
     emisConfig.speechThreshold = newThreshold;
     saveConfig();
     return {
-      success: true, 
+      success: true,
       response: `I've lowered my speech detection threshold to ${newThreshold}. This should make it easier for me to hear you.`
     };
   }
-  
+
   if (cleanCommand.includes('raise threshold') || cleanCommand.includes('increase threshold')) {
     const newThreshold = Math.min(30, emisConfig.speechThreshold + 2);
     emisConfig.speechThreshold = newThreshold;
     saveConfig();
     return {
-      success: true, 
+      success: true,
       response: `I've increased my speech detection threshold to ${newThreshold}. This should reduce false activations.`
     };
   }
-  
+
   if (cleanCommand.includes('set threshold')) {
-    // Extract number from command
     const match = cleanCommand.match(/\d+/);
     if (match) {
       const newThreshold = parseInt(match[0]);
@@ -768,68 +774,62 @@ ipcMain.handle('execute-command', async (event, command) => {
         emisConfig.speechThreshold = newThreshold;
         saveConfig();
         return {
-          success: true, 
+          success: true,
           response: `I've set my speech detection threshold to ${newThreshold}.`
         };
       }
     }
-    
+
     return {
       success: true,
       response: "Please specify a threshold value between 5 and 30."
     };
   }
-  
-  // Help command
+
+  // ===== HELP =====
   if (cleanCommand === 'help' || cleanCommand === 'what can you do') {
     return {
       success: true,
-      response: "I can help with various tasks like opening applications, telling time and date, answering questions, and more. Just speak naturally, and I'll do my best to assist you."
+      response: "I can help with opening applications, controlling your system, playing music, checking weather, telling time, and more. Just speak naturally, and I'll do my best to assist you."
     };
   }
-  
-  // Unknown command fallback
-  return { 
-    success: false, 
-    response: emisConfig.personality.unknownCommand || "I'm sorry, I didn't understand that command." 
+
+  // ===== UNKNOWN COMMAND =====
+  return {
+    success: false,
+    response: emisConfig.personality.unknownCommand || "I'm sorry, I didn't understand that command."
   };
 });
 
-// Direct speech recognition controls
-ipcMain.handle('start-listening', async () => {
-  return { 
-    success: true, 
-    message: "Started listening" 
-  };
+// =================================================================
+// IPC HANDLERS - MISC
+// =================================================================
+ipcMain.handle('start-listening', async (): Promise<CommandResult> => {
+  return { success: true, response: "Started listening" };
 });
 
-ipcMain.handle('stop-listening', async () => {
-  return { 
-    success: true, 
-    message: "Stopped listening" 
-  };
+ipcMain.handle('stop-listening', async (): Promise<CommandResult> => {
+  return { success: true, response: "Stopped listening" };
 });
 
-// Add handler to save audio recordings for debugging
-ipcMain.handle('save-recording', async (event, buffer, filename) => {
+ipcMain.handle('save-recording', async (_event: IpcMainInvokeEvent, buffer: Buffer, filename?: string): Promise<SaveRecordingResult> => {
   try {
     const savePath = path.join(app.getPath('userData'), 'recordings');
-    
-    // Create the directory if it doesn't exist
+
     if (!fs.existsSync(savePath)) {
       fs.mkdirSync(savePath, { recursive: true });
     }
-    
+
     const filePath = path.join(savePath, filename || `recording-${Date.now()}.webm`);
     await fs.promises.writeFile(filePath, buffer);
-    
+
     console.log(`Recording saved to: ${filePath}`);
-    
+
     return {
       success: true,
       path: filePath
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error saving recording:', error);
     return {
       success: false,
@@ -838,15 +838,14 @@ ipcMain.handle('save-recording', async (event, buffer, filename) => {
   }
 });
 
-// Add handler to get system information
-ipcMain.handle('get-system-info', () => {
+ipcMain.handle('get-system-info', (): SystemInfo => {
   return {
     platform: process.platform,
     arch: process.arch,
     version: process.version,
-    electronVersion: process.versions.electron,
-    chromeVersion: process.versions.chrome,
-    nodeVersion: process.versions.node,
+    electronVersion: process.versions.electron as string,
+    chromeVersion: process.versions.chrome as string,
+    nodeVersion: process.versions.node as string,
     emisVersion: app.getVersion(),
     uptime: process.uptime(),
     memoryUsage: process.memoryUsage(),
@@ -854,8 +853,7 @@ ipcMain.handle('get-system-info', () => {
   };
 });
 
-// Add handler to toggle dev tools
-ipcMain.handle('toggle-dev-tools', () => {
+ipcMain.handle('toggle-dev-tools', (): DevToolsResult => {
   if (mainWindow) {
     if (mainWindow.webContents.isDevToolsOpened()) {
       mainWindow.webContents.closeDevTools();
@@ -868,7 +866,6 @@ ipcMain.handle('toggle-dev-tools', () => {
   return { error: 'Main window not available' };
 });
 
-// Add handlers for window control
 ipcMain.on('minimize-window', () => {
   if (mainWindow) mainWindow.minimize();
 });
@@ -887,27 +884,325 @@ ipcMain.on('close-window', () => {
   if (mainWindow) mainWindow.close();
 });
 
-// Add handler to get available audio devices
-ipcMain.handle('get-audio-devices', async () => {
-  // This requires additional modules like 'electron-audio-devices'
-  // For now, return a placeholder
+ipcMain.handle('get-audio-devices', async (): Promise<AudioDevicesResult> => {
   return {
     success: true,
     devices: []
   };
 });
 
-// Platform-specific application opening with enhanced cross-platform support
-function openApplication(appName) {
+// =================================================================
+// COMMAND HELPER FUNCTIONS - POWER CONTROL
+// =================================================================
+function shutdownSystem(): Promise<CommandResult> {
   const platform = process.platform;
-  let command;
-  
-  // Cross-platform application mapping
-  // Structure: 'app-name': { win: 'windows-command', mac: 'macos-command', linux: 'linux-command' }
-  const appMap = {
-    // Common applications
+  let command: string;
+
+  if (platform === 'win32') {
+    command = 'shutdown /s /t 5';
+  } else if (platform === 'darwin') {
+    command = 'osascript -e "tell application \\"System Events\\" to shut down"';
+  } else {
+    command = 'systemctl poweroff';
+  }
+
+  console.log(`Executing shutdown: ${command}`);
+
+  return new Promise((resolve) => {
+    exec(command, (error) => {
+      if (error) {
+        console.error(`Error shutting down:`, error);
+        resolve({
+          success: false,
+          response: `I encountered an error trying to shutdown: ${error.message}`
+        });
+      } else {
+        resolve({
+          success: true,
+          response: "Shutting down the system in 5 seconds. Goodbye."
+        });
+      }
+    });
+  });
+}
+
+function restartSystem(): Promise<CommandResult> {
+  const platform = process.platform;
+  let command: string;
+
+  if (platform === 'win32') {
+    command = 'shutdown /r /t 5';
+  } else if (platform === 'darwin') {
+    command = 'osascript -e "tell application \\"System Events\\" to restart"';
+  } else {
+    command = 'systemctl reboot';
+  }
+
+  console.log(`Executing restart: ${command}`);
+
+  return new Promise((resolve) => {
+    exec(command, (error) => {
+      if (error) {
+        console.error(`Error restarting:`, error);
+        resolve({
+          success: false,
+          response: `I encountered an error trying to restart: ${error.message}`
+        });
+      } else {
+        resolve({
+          success: true,
+          response: "Restarting the system in 5 seconds. I'll see you soon."
+        });
+      }
+    });
+  });
+}
+
+function sleepSystem(): Promise<CommandResult> {
+  const platform = process.platform;
+  let command: string;
+
+  if (platform === 'win32') {
+    command = 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0';
+  } else if (platform === 'darwin') {
+    command = 'pmset sleepnow';
+  } else {
+    command = 'systemctl suspend';
+  }
+
+  console.log(`Executing sleep: ${command}`);
+
+  return new Promise((resolve) => {
+    exec(command, (error) => {
+      if (error) {
+        console.error(`Error putting system to sleep:`, error);
+        resolve({
+          success: false,
+          response: `I encountered an error trying to sleep: ${error.message}`
+        });
+      } else {
+        resolve({
+          success: true,
+          response: "Putting the system to sleep. Sweet dreams."
+        });
+      }
+    });
+  });
+}
+
+function lockScreen(): Promise<CommandResult> {
+  const platform = process.platform;
+  let command: string;
+
+  if (platform === 'win32') {
+    command = 'rundll32.exe user32.dll,LockWorkStation';
+  } else if (platform === 'darwin') {
+    command = '/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend';
+  } else {
+    command = 'loginctl lock-session || gnome-screensaver-command -l || xdg-screensaver lock';
+  }
+
+  console.log(`Executing lock screen: ${command}`);
+
+  return new Promise((resolve) => {
+    exec(command, (error) => {
+      if (error) {
+        console.error(`Error locking screen:`, error);
+        resolve({
+          success: false,
+          response: `I encountered an error trying to lock the screen: ${error.message}`
+        });
+      } else {
+        resolve({
+          success: true,
+          response: "Locking the screen now. Stay safe."
+        });
+      }
+    });
+  });
+}
+
+// =================================================================
+// COMMAND HELPER FUNCTIONS - MEDIA CONTROL
+// =================================================================
+function mediaControl(action: string): Promise<CommandResult> {
+  const platform = process.platform;
+  let command: string;
+
+  if (platform === 'win32') {
+    const commands: { [key: string]: string } = {
+      'play': '(New-Object -ComObject WMPlayer.OCX).controls.play()',
+      'pause': '(New-Object -ComObject WMPlayer.OCX).controls.pause()',
+      'stop': '(New-Object -ComObject WMPlayer.OCX).controls.stop()',
+      'next': '(Add-Type -AssemblyName System.Windows.Forms); [System.Windows.Forms.SendKeys]::SendWait("{MEDIA_NEXT_TRACK}")',
+      'previous': '(Add-Type -AssemblyName System.Windows.Forms); [System.Windows.Forms.SendKeys]::SendWait("{MEDIA_PREV_TRACK}")',
+      'mute': '(New-Object -ComObject WScript.Shell).SendKeys([char]173)',
+      'unmute': '(New-Object -ComObject WScript.Shell).SendKeys([char]173)'
+    };
+    command = `powershell -Command "${commands[action] || commands['play']}"`;
+  } else if (platform === 'darwin') {
+    const commands: { [key: string]: string } = {
+      'play': 'osascript -e "tell application \\"System Events\\" to key code 16"',
+      'pause': 'osascript -e "tell application \\"System Events\\" to key code 16"',
+      'stop': 'osascript -e "tell application \\"System Events\\" to key code 16"',
+      'next': 'osascript -e "tell application \\"System Events\\" to key code 17"',
+      'previous': 'osascript -e "tell application \\"System Events\\" to key code 18"',
+      'mute': 'osascript -e "set volume with output muted"',
+      'unmute': 'osascript -e "set volume without output muted"'
+    };
+    command = commands[action] || commands['play'];
+  } else {
+    const commands: { [key: string]: string } = {
+      'play': 'playerctl play || dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Play',
+      'pause': 'playerctl pause || dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Pause',
+      'stop': 'playerctl stop || dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Stop',
+      'next': 'playerctl next || dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Next',
+      'previous': 'playerctl previous || dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Previous',
+      'mute': 'amixer set Master mute',
+      'unmute': 'amixer set Master unmute'
+    };
+    command = commands[action] || commands['play'];
+  }
+
+  console.log(`Executing media control (${action}): ${command}`);
+
+  return new Promise((resolve) => {
+    exec(command, (error) => {
+      if (error) {
+        console.error(`Error with media control:`, error);
+        resolve({
+          success: false,
+          response: `I encountered an error controlling media playback. Make sure you have a media player open.`
+        });
+      } else {
+        const responses: { [key: string]: string } = {
+          'play': 'Playing your music.',
+          'pause': 'Music paused.',
+          'stop': 'Music stopped.',
+          'next': 'Skipping to the next track.',
+          'previous': 'Going back to the previous track.',
+          'mute': 'Audio muted.',
+          'unmute': 'Audio unmuted.'
+        };
+        resolve({
+          success: true,
+          response: responses[action] || 'Media command executed.'
+        });
+      }
+    });
+  });
+}
+
+// =================================================================
+// COMMAND HELPER FUNCTIONS - VOLUME CONTROL
+// =================================================================
+function volumeControl(direction: string): Promise<CommandResult> {
+  const platform = process.platform;
+  let command: string;
+
+  if (platform === 'win32') {
+    if (direction === 'up') {
+      command = 'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]175)"';
+    } else {
+      command = 'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]174)"';
+    }
+  } else if (platform === 'darwin') {
+    if (direction === 'up') {
+      command = 'osascript -e "set volume output volume (output volume of (get volume settings) + 10)"';
+    } else {
+      command = 'osascript -e "set volume output volume (output volume of (get volume settings) - 10)"';
+    }
+  } else {
+    if (direction === 'up') {
+      command = 'amixer set Master 5%+';
+    } else {
+      command = 'amixer set Master 5%-';
+    }
+  }
+
+  return new Promise((resolve) => {
+    exec(command, (error) => {
+      if (error) {
+        console.error(`Error controlling volume:`, error);
+        resolve({
+          success: false,
+          response: "I encountered an error adjusting the volume."
+        });
+      } else {
+        resolve({
+          success: true,
+          response: direction === 'up' ? "Increasing volume." : "Decreasing volume."
+        });
+      }
+    });
+  });
+}
+
+// =================================================================
+// COMMAND HELPER FUNCTIONS - WEATHER
+// =================================================================
+async function getWeather(location: string | null = null): Promise<CommandResult> {
+  try {
+    const API_KEY = process.env.OPENWEATHER_API_KEY || 'YOUR_API_KEY';
+    const defaultLocation = 'Southampton,GB';
+    const queryLocation = location || defaultLocation;
+
+    if (API_KEY === 'YOUR_API_KEY') {
+      return {
+        success: false,
+        response: "I don't have access to weather data yet. To enable this, you'll need to sign up for a free API key at openweathermap.org and add it to your environment variables as OPENWEATHER_API_KEY."
+      };
+    }
+
+    const axios = require('axios');
+    const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(queryLocation)}&appid=${API_KEY}&units=metric`;
+
+    const response = await axios.get(url);
+    const data = response.data;
+
+    const temp = Math.round(data.main.temp);
+    const feelsLike = Math.round(data.main.feels_like);
+    const description = data.weather[0].description;
+    const locationName = data.name;
+    const country = data.sys.country;
+
+    const weatherResponse = location
+      ? `The weather in ${locationName}, ${country} is ${description} with a temperature of ${temp}°C, feels like ${feelsLike}°C.`
+      : `The current weather in ${locationName} is ${description}. It's ${temp}°C, feels like ${feelsLike}°C.`;
+
+    return {
+      success: true,
+      response: weatherResponse
+    };
+  } catch (error: any) {
+    console.error('Weather API error:', error);
+
+    if (error.response && error.response.status === 404) {
+      return {
+        success: false,
+        response: location
+          ? `I couldn't find weather information for "${location}". Could you try a different location or be more specific?`
+          : "I couldn't retrieve the weather for your area."
+      };
+    }
+
+    return {
+      success: false,
+      response: "I'm having trouble accessing weather information right now. Please try again later."
+    };
+  }
+}
+
+// =================================================================
+// COMMAND HELPER FUNCTIONS - OPEN APPLICATION
+// =================================================================
+function openApplication(appName: string): Promise<CommandResult> {
+  const platform = process.platform;
+  let command: string;
+
+  const appMap: AppMappings = {
     'spotify': {
-      win: path.join(process.env.APPDATA, 'Spotify', 'Spotify.exe'),
+      win: path.join(process.env.APPDATA as string, 'Spotify', 'Spotify.exe'),
       mac: 'Spotify',
       linux: 'spotify',
       flatpak: 'com.spotify.Client'
@@ -930,8 +1225,6 @@ function openApplication(appName) {
       linux: 'discord',
       flatpak: 'com.discordapp.Discord'
     },
-    
-    // Office applications
     'word': {
       win: 'winword',
       mac: 'Microsoft Word',
@@ -947,8 +1240,6 @@ function openApplication(appName) {
       mac: 'Microsoft PowerPoint',
       linux: 'libreoffice --impress'
     },
-    
-    // Text editors
     'notepad': {
       win: 'notepad',
       mac: 'TextEdit',
@@ -960,16 +1251,12 @@ function openApplication(appName) {
       linux: 'code',
       flatpak: 'com.visualstudio.code'
     },
-    
-    // Media players
     'vlc': {
       win: 'vlc',
       mac: 'VLC',
       linux: 'vlc',
       flatpak: 'org.videolan.VLC'
     },
-    
-    // Communication apps
     'slack': {
       win: 'slack',
       mac: 'Slack',
@@ -988,8 +1275,6 @@ function openApplication(appName) {
       linux: 'zoom',
       flatpak: 'us.zoom.Zoom'
     },
-    
-    // Browsers
     'edge': {
       win: 'msedge',
       mac: 'Microsoft Edge',
@@ -1002,12 +1287,10 @@ function openApplication(appName) {
       linux: 'brave-browser',
       flatpak: 'com.brave.Browser'
     },
-    
-    // Graphics and design
     'photoshop': {
       win: 'photoshop',
       mac: 'Adobe Photoshop',
-      linux: 'gimp',  // Fallback to GIMP on Linux
+      linux: 'gimp',
       flatpak: 'org.gimp.GIMP'
     },
     'gimp': {
@@ -1016,8 +1299,6 @@ function openApplication(appName) {
       linux: 'gimp',
       flatpak: 'org.gimp.GIMP'
     },
-    
-    // Development tools
     'terminal': {
       win: 'cmd',
       mac: 'Terminal',
@@ -1029,8 +1310,6 @@ function openApplication(appName) {
       linux: 'github-desktop',
       flatpak: 'io.github.shiftey.Desktop'
     },
-    
-    // Gaming
     'steam': {
       win: 'steam',
       mac: 'Steam',
@@ -1040,21 +1319,18 @@ function openApplication(appName) {
     'epic': {
       win: 'epicgameslauncher',
       mac: 'Epic Games Launcher',
-      linux: 'legendary',  // Legendary is an open-source Epic Games launcher for Linux
-      flatpak: 'com.heroicgameslauncher.hgl'  // Heroic Games Launcher as an alternative
+      linux: 'legendary',
+      flatpak: 'com.heroicgameslauncher.hgl'
     }
   };
-  
-  // Detect if we have a matching app
+
   const appKey = appName.toLowerCase();
   const appData = appMap[appKey];
-  
+
   if (!appData) {
-    // No mapping found, try to run the command as provided
     console.log(`No mapping found for ${appName}, trying direct command`);
     command = appName;
   } else {
-    // Get platform-specific command
     switch (platform) {
       case 'win32':
         command = appData.win || appName;
@@ -1062,84 +1338,76 @@ function openApplication(appName) {
       case 'darwin':
         command = appData.mac || appName;
         break;
-      default: // Linux and others
-        // Check for Flatpak first
+      default:
         if (appData.flatpak) {
-          // Try to check if this Flatpak is installed
           try {
-            const { execSync } = require('child_process');
             const flatpakCheck = execSync(`flatpak info ${appData.flatpak} 2>/dev/null || echo "not-installed"`).toString();
-            
+
             if (!flatpakCheck.includes("not-installed")) {
               console.log(`Found Flatpak for ${appName}: ${appData.flatpak}`);
               command = `flatpak run ${appData.flatpak}`;
               break;
             }
-          } catch (error) {
+          } catch (error: any) {
             console.log(`Error checking Flatpak: ${error.message}`);
           }
         }
-        
-        // Fallback to standard Linux command
+
         command = appData.linux || appName;
         break;
     }
   }
-  
-  // Format the command for each platform
-  let finalCommand;
+
+  let finalCommand: string;
   if (platform === 'win32') {
     finalCommand = `start ${command}`;
   } else if (platform === 'darwin') {
-    // On macOS, if the command includes a space, it's likely an application name
     if (command.includes(' ')) {
       finalCommand = `open -a "${command}"`;
     } else {
       finalCommand = `open -a "${command}" || ${command}`;
     }
   } else {
-    // Linux: handle Flatpak commands directly
     if (command.startsWith('flatpak run')) {
       finalCommand = command;
     } else {
       finalCommand = command;
     }
   }
-  
+
   console.log(`Attempting to execute: ${finalCommand}`);
-  
+
   return new Promise((resolve) => {
     exec(finalCommand, (error) => {
       if (error) {
         console.error(`Error opening ${appName}:`, error);
-        
-        // Try fallback options if available
+
         if (platform === 'linux' && appData && appData.flatpak) {
           console.log(`Trying Flatpak fallback for ${appName}`);
           exec(`flatpak run ${appData.flatpak}`, (flatpakError) => {
             if (flatpakError) {
               console.error(`Flatpak fallback also failed:`, flatpakError);
-              resolve({ 
-                success: false, 
-                response: `I couldn't open ${appName}. The application might not be installed.` 
+              resolve({
+                success: false,
+                response: `I couldn't open ${appName}. The application might not be installed.`
               });
             } else {
-              resolve({ 
-                success: true, 
-                response: `Opening ${appName} using Flatpak.` 
+              resolve({
+                success: true,
+                response: `Opening ${appName} using Flatpak.`
               });
             }
           });
         } else {
-          resolve({ 
-            success: false, 
-            response: `I couldn't open ${appName}. The application might not be installed.` 
+          resolve({
+            success: false,
+            response: `I couldn't open ${appName}. The application might not be installed.`
           });
         }
       } else {
-        resolve({ 
-          success: true, 
-          response: `Opening ${appName} for you.` 
+        resolve({
+          success: true,
+          response: `Opening ${appName} for you.`
         });
       }
     });

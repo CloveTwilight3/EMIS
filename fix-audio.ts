@@ -1,31 +1,30 @@
-// fix-audio.js - Add to your project root directory
-const { ipcRenderer } = require('electron');
-const fs = require('fs');
-const path = require('path');
+// fix-audio.ts - Audio playback utility
+
+import { ipcRenderer } from 'electron';
 
 // Listen for synthesize-speech response from main process
-ipcRenderer.on('audio-file-ready', (event, audioFilePath) => {
+ipcRenderer.on('audio-file-ready', (_event: Electron.IpcRendererEvent, audioFilePath: string) => {
   console.log('Audio file ready to play:', audioFilePath);
   playAudioFile(audioFilePath);
 });
 
 // Function to play audio file
-function playAudioFile(filePath) {
+function playAudioFile(filePath: string): void {
   const audio = new Audio(filePath);
   audio.volume = 1.0; // Set to maximum volume
-  
+
   audio.onplay = () => {
     console.log('Audio playback started');
   };
-  
+
   audio.onended = () => {
     console.log('Audio playback completed');
   };
-  
+
   audio.onerror = (error) => {
     console.error('Audio playback error:', error);
   };
-  
+
   // Try to play the audio
   audio.play().catch(error => {
     console.error('Failed to play audio:', error);
@@ -33,4 +32,4 @@ function playAudioFile(filePath) {
 }
 
 // Export function for direct use
-module.exports = { playAudioFile };
+export { playAudioFile };

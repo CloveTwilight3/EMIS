@@ -1,18 +1,21 @@
-// Enhanced renderer.js with improved speech recognition and audio playback
+// Enhanced renderer.ts with improved speech recognition and audio playback
+
+// @ts-nocheck - Allow for browser-specific APIs
+export {}; // Make this a module
 
 // Elements
-const startBtn = document.getElementById('start-btn');
-const stopBtn = document.getElementById('stop-btn');
-const transcriptText = document.getElementById('transcript-text');
-const responseText = document.getElementById('response-text');
-const statusElement = document.querySelector('.status');
-const visualizer = document.querySelector('.emis-visualizer');
-const settingsBtn = document.querySelector('.settings-button');
-const settingsPanel = document.querySelector('.settings-panel');
-const wakeWordInput = document.getElementById('wake-word');
-const voiceSelect = document.getElementById('voice-select');
-const volumeInput = document.getElementById('volume');
-const saveSettingsBtn = document.getElementById('save-settings');
+const startBtn = document.getElementById('start-btn') as HTMLButtonElement;
+const stopBtn = document.getElementById('stop-btn') as HTMLButtonElement;
+const transcriptText = document.getElementById('transcript-text') as HTMLElement;
+const responseText = document.getElementById('response-text') as HTMLElement;
+const statusElement = document.querySelector('.status') as HTMLElement;
+const visualizer = document.querySelector('.emis-visualizer') as HTMLElement;
+const settingsBtn = document.querySelector('.settings-button') as HTMLElement;
+const settingsPanel = document.querySelector('.settings-panel') as HTMLElement;
+const wakeWordInput = document.getElementById('wake-word') as HTMLInputElement;
+const voiceSelect = document.getElementById('voice-select') as HTMLSelectElement;
+const volumeInput = document.getElementById('volume') as HTMLInputElement;
+const saveSettingsBtn = document.getElementById('save-settings') as HTMLButtonElement;
 
 // Create a manual command input element as fallback
 const manualCommandContainer = document.createElement('div');
@@ -112,16 +115,16 @@ visualizerCanvas.style.opacity = '0.7';
 visualizer.appendChild(visualizerCanvas);
 
 // State variables
-let isListening = false;
-let audioContext = null;
-let audioStream = null;
-let audioProcessor = null;
-let audioAnalyser = null;
-let audioData = null;
-let animationFrame = null;
-let synth = window.speechSynthesis;
-let recognition = null;
-let emisConfig = {
+let isListening: boolean = false;
+let audioContext: AudioContext | null = null;
+let audioStream: MediaStream | null = null;
+let audioProcessor: ScriptProcessorNode | null = null;
+let audioAnalyser: AnalyserNode | null = null;
+let audioData: Uint8Array | null = null;
+let animationFrame: number | null = null;
+let synth: SpeechSynthesis = window.speechSynthesis;
+let recognition: any = null;
+let emisConfig: any = {
   wakeWord: 'emis',
   voice: 'default',
   fallbackVoice: {
@@ -134,16 +137,16 @@ let emisConfig = {
 };
 
 // Debug variables
-let debugVisible = false;
-let debugLog = [];
-const MAX_DEBUG_ENTRIES = 100;
+let debugVisible: boolean = false;
+let debugLog: string[] = [];
+const MAX_DEBUG_ENTRIES: number = 100;
 
 // Currently playing audio element
-let currentAudio = null;
+let currentAudio: HTMLAudioElement | null = null;
 
 // Global volume tracking variables
-let currentVolume = 0;
-let activeVolumeThreshold = 10;
+let currentVolume: number = 0;
+let activeVolumeThreshold: number = 10;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -191,7 +194,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // Debug logging function
-function logDebug(message, level = 'info') {
+function logDebug(message: string, level: string = 'info'): void {
   const timestamp = new Date().toLocaleTimeString();
   const logEntry = `[${timestamp}][${level.toUpperCase()}] ${message}`;
   
